@@ -6,11 +6,13 @@
 use crate::constants;
 
 /// 基于字符（而非字节）的文本长度。
+#[must_use]
 pub(crate) fn char_len(s: &str) -> usize {
     s.chars().count()
 }
 
 /// 将字符列位置转换为字节偏移。
+#[must_use]
 pub(crate) fn char_to_byte(s: &str, col: usize) -> usize {
     s.char_indices().nth(col).map(|(b, _)| b).unwrap_or(s.len())
 }
@@ -34,6 +36,7 @@ impl Editor {
         }
     }
 
+    #[must_use]
     pub fn text(&self) -> String {
         self.lines.join("\n")
     }
@@ -53,18 +56,22 @@ impl Editor {
         *self = Editor::new();
     }
 
+    #[must_use]
     pub fn is_blank(&self) -> bool {
         self.lines.iter().all(|l| l.trim().is_empty())
     }
 
+    #[must_use]
     pub fn at_first_line(&self) -> bool {
         self.row == 0
     }
 
+    #[must_use]
     pub fn at_last_line(&self) -> bool {
         self.row + 1 == self.lines.len()
     }
 
+    #[must_use]
     pub fn cur_len(&self) -> usize {
         char_len(&self.lines[self.row])
     }
@@ -229,6 +236,7 @@ impl Editor {
         self.lines[self.row] = head;
     }
 
+    #[must_use]
     pub fn displayed_rows(&self) -> usize {
         self.lines.len().clamp(1, constants::MAX_TEXT_ROWS)
     }

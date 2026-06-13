@@ -9,7 +9,6 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatppuccinFlavor {
     Latte,
@@ -38,7 +37,6 @@ impl CatppuccinFlavor {
     }
 }
 
-#[allow(dead_code)]
 pub struct CatppuccinColors {
     pub rosewater: Color,
     pub flamingo: Color,

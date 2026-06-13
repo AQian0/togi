@@ -61,7 +61,7 @@ impl AppController {
             }
         }
 
-        let hist = self.history.read().await.clone();
+        let hist = Arc::clone(&*self.history.read().await);
         let _ = self.cancel_tx.send_replace(false);
         let cancel_rx = self.cancel_tx.subscribe();
         let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();

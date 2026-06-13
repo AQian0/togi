@@ -7,6 +7,7 @@ use std::path::Path;
 /// 生成经典 hexdump 格式：
 /// 每行 `HEXDUMP_BYTES_PER_ROW` 字节，偏移 + hex + ASCII 预览。
 /// `base_offset` 用于大文件场景，使偏移从文件的实际位置开始计数。
+#[must_use]
 pub(super) fn render_hexdump(data: &[u8], max_bytes: usize, base_offset: u64) -> String {
     const ROW: usize = constants::HEXDUMP_BYTES_PER_ROW;
     let len = data.len().min(max_bytes);
@@ -51,6 +52,7 @@ pub(super) fn render_hexdump(data: &[u8], max_bytes: usize, base_offset: u64) ->
     out
 }
 
+#[must_use]
 pub(super) fn render_base64(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)

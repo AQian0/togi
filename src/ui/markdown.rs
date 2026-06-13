@@ -222,11 +222,12 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
             },
             Event::Text(text) => {
                 let style = current_style(&style_stack);
-                let parts: Vec<&str> = text.split('\n').collect();
-                for (i, part) in parts.iter().enumerate() {
-                    if i > 0 {
+                let mut first = true;
+                for part in text.split('\n') {
+                    if !first {
                         lines.push(Line::from(std::mem::take(&mut spans)));
                     }
+                    first = false;
                     if !part.is_empty() {
                         spans.push(Span::styled(part.to_string(), style));
                     }

@@ -288,6 +288,7 @@ pub fn syntect_to_ratatui(style: syntect::highlighting::Style) -> Style {
     s
 }
 
+#[must_use]
 pub fn find_syntax(lang: &str) -> Option<&'static syntect::parsing::SyntaxReference> {
     if lang.is_empty() {
         return None;

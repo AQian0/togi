@@ -36,11 +36,12 @@ impl Shell {
     }
 }
 
-/// 判断一条 shell 命令是否为“纯查询”（只读）命令。
+/// 判断一条 shell 命令是否为"纯查询"（只读）命令。
 ///
 /// 仅用于决定结果在对话区的展示方式（隐藏冗长输出），不影响命令执行；
 /// 因此采用保守的白名单：命令序列 / 管道中的每一段，其首词都必须是已知
 /// 只读命令，且不含输出重定向。无法确定时一律按有副作用处理（照常展示）。
+#[must_use]
 fn is_query_command(command: &str) -> bool {
     let command = command.trim();
     // 任何输出重定向都可能写文件，视为有副作用。
@@ -61,8 +62,9 @@ fn is_query_command(command: &str) -> bool {
         })
 }
 
-/// 常见的“纯查询 / 只读”命令白名单。只纳入明确无副作用的命令
+/// 常见的"纯查询 / 只读"命令白名单。只纳入明确无副作用的命令
 /// （故意排除 `sed`/`awk`/`tee` 等可写入的命令）。
+#[must_use]
 #[inline]
 fn is_read_only_command(cmd: &str) -> bool {
     matches!(

@@ -4,7 +4,6 @@
 //! 错误分类、错误码约定和应用入口错误。这样不会破坏工具面向模型的
 //! 具体 Display 文案，同时为日志、测试和未来 UI 结构化展示保留语义。
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
     InvalidArgument,
@@ -25,7 +24,6 @@ pub enum ErrorKind {
 /// 项目内部错误的稳定语义接口。
 ///
 /// `Display` 仍负责给用户/模型看的可读文案；`code` 和 `kind` 负责稳定分类。
-#[allow(dead_code)]
 pub trait TogiError: std::error::Error {
     /// 稳定错误码。使用小写点分格式，例如 `read.not_found`。
     fn code(&self) -> &'static str;
@@ -44,7 +42,6 @@ pub trait TogiError: std::error::Error {
 
 pub type Result<T> = std::result::Result<T, AppError>;
 
-#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error(transparent)]

@@ -175,7 +175,8 @@ pub(crate) async fn streaming_read_text(
     };
 
     let text = if valid_len > 0 {
-        String::from_utf8(buf[..valid_len].to_vec())
+        buf.truncate(valid_len);
+        String::from_utf8(buf)
             .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?
     } else {
         String::new()

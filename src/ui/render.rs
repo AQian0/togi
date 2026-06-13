@@ -56,6 +56,7 @@ pub fn display_width(c: char) -> usize {
 }
 
 /// 计算字符串前 `col` 个字符在终端中的显示宽度。
+#[must_use]
 pub fn prefix_width(s: &str, col: usize) -> usize {
     s.chars().take(col).map(display_width).sum()
 }
@@ -64,6 +65,7 @@ pub fn prefix_width(s: &str, col: usize) -> usize {
 ///
 /// 跳过前 `offset` 显示宽度，然后取最多 `width` 显示宽度的字符。
 /// CJK 字符跨边界时用空格填充。
+#[must_use]
 pub fn visible_slice(line: &str, offset: usize, width: usize) -> String {
     if width == 0 {
         return String::new();
@@ -229,15 +231,12 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
             let base_width = (conv_area.width as usize).saturating_sub(reserve).max(1);
             let wrapped = wrap_line(line, base_width);
             for wline in wrapped {
-                let effective_width = if *align == Align::Right {
-                    conv_area
+                if *align == Align::Right {
+                    let effective_width = conv_area
                         .width
-                        .saturating_sub(constants::USER_MARGIN as u16) as usize
-                } else {
-                    base_width
-                };
-                let re_wrapped = wrap_line(&wline, effective_width.max(1));
-                for rline in re_wrapped {
+                        .saturating_sub(constants::USER_MARGIN as u16) as usize;
+                    let re_wrapped = wrap_line(&wline, effective_width.max(1));
+                    for rline in re_wrapped {
                     let dw: usize = rline
                         .spans
                         .iter()
@@ -256,8 +255,6 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
                     }));
 
                     if *align == Align::Right {
-                        // 气泡内容按 effective_width 折行，但右对齐到距右边缘
-                        // USER_EDGE_MARGIN 处，使其紧贴右侧。
                         let target =
                             (conv_area.width as usize).saturating_sub(constants::USER_EDGE_MARGIN);
                         let pad = target.saturating_sub(dw);
@@ -265,6 +262,36 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
                             spans.insert(0, Span::styled(" ".repeat(pad), Style::default()));
                         }
                     }
+
+                    if *align == Align::Left
+                        && let Some(bg_color) = block_bg
+                    {
+                        let full_width = conv_area.width as usize;
+                        let current_w: usize = spans
+                            .iter()
+                            .flat_map(|s| s.content.chars())
+                            .map(display_width)
+                            .sum();
+                        if current_w < full_width {
+                            spans.push(Span::styled(
+                                " ".repeat(full_width - current_w),
+                                Style::default().bg(bg_color),
+                            ));
+                        }
+                    }
+                    display_lines.push(Line::from(spans));
+                    }
+                } else {
+                    let mut spans: Vec<Span> = Vec::new();
+
+                    if let Some(bs) = gutter {
+                        spans.push(block_gutter_span(bs));
+                    }
+
+                    let block_bg = block.and_then(|bs| bs.bg);
+                    spans.extend(wline.spans.iter().map(|s| {
+                        Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
+                    }));
 
                     if *align == Align::Left
                         && let Some(bg_color) = block_bg

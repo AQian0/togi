@@ -219,7 +219,11 @@ impl Modify {
                                 path: path.display().to_string(),
                                 source: e,
                             })?;
-                    Ok(resolved_parent.join(path.file_name().unwrap()))
+                    let file_name = path.file_name().ok_or_else(|| ModifyError::Io {
+                        path: path.display().to_string(),
+                        source: std::io::Error::other("path has no file name component"),
+                    })?;
+                    Ok(resolved_parent.join(file_name))
                 } else {
                     Ok(path.to_path_buf())
                 }

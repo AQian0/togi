@@ -123,7 +123,7 @@ fn paginate_text(
 /// schemars keeps the `offset`/`limit` definitions in one typed place instead of
 /// hand-written JSON, mirroring how the concrete tools declare their arguments.
 #[derive(JsonSchema)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct PaginationParams {
     /// 1-based line number of this tool's output to start from. Defaults to 1.
     /// Use together with `limit` to page through large output.
@@ -232,7 +232,7 @@ mod tests {
     }
     #[derive(JsonSchema)]
     struct RawEchoArgs {
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         text: String,
     }
     struct RawEcho;

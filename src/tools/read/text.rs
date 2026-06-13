@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 /// 将文本内容渲染为带行号的分页友好输出。
+#[must_use]
 pub(super) fn render(content: &str) -> String {
     let total = content.lines().count();
     if total == 0 {
