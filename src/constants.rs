@@ -13,7 +13,7 @@ pub(crate) const DEFAULT_PAGE_LINES: usize = 400;
 // ── Agent ─────────────────────────────────────────────────────────
 
 /// Agent 流式对话中允许的最大多轮工具调用循环次数。
-pub(crate) const MAX_MULTI_TURN_ITERATIONS: u32 = 3;
+pub(crate) const MAX_MULTI_TURN_ITERATIONS: u32 = 10;
 
 /// 系统提示词默认值。
 pub(crate) const DEFAULT_PREAMBLE: &str = "\
