@@ -36,14 +36,6 @@ impl Shell {
     }
 }
 
-/// 常见的“纯查询 / 只读”命令白名单。只纳入明确无副作用的命令
-/// （故意排除 `sed`/`awk`/`tee` 等可写入的命令）。
-const READ_ONLY_COMMANDS: &[&str] = &[
-    "ls", "cat", "head", "tail", "wc", "stat", "file", "tree", "find", "grep", "rg", "egrep",
-    "fgrep", "pwd", "which", "whoami", "date", "du", "df", "echo", "dirname", "basename",
-    "realpath", "readlink", "sort", "uniq", "cut", "nl", "diff",
-];
-
 /// 判断一条 shell 命令是否为“纯查询”（只读）命令。
 ///
 /// 仅用于决定结果在对话区的展示方式（隐藏冗长输出），不影响命令执行；
@@ -65,8 +57,45 @@ fn is_query_command(command: &str) -> bool {
             segment
                 .split_whitespace()
                 .next()
-                .is_some_and(|head| READ_ONLY_COMMANDS.contains(&head))
+                .is_some_and(is_read_only_command)
         })
+}
+
+/// 常见的“纯查询 / 只读”命令白名单。只纳入明确无副作用的命令
+/// （故意排除 `sed`/`awk`/`tee` 等可写入的命令）。
+#[inline]
+fn is_read_only_command(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "ls" | "cat"
+            | "head"
+            | "tail"
+            | "wc"
+            | "stat"
+            | "file"
+            | "tree"
+            | "find"
+            | "grep"
+            | "rg"
+            | "egrep"
+            | "fgrep"
+            | "pwd"
+            | "which"
+            | "whoami"
+            | "date"
+            | "du"
+            | "df"
+            | "echo"
+            | "dirname"
+            | "basename"
+            | "realpath"
+            | "readlink"
+            | "sort"
+            | "uniq"
+            | "cut"
+            | "nl"
+            | "diff"
+    )
 }
 
 #[derive(Deserialize, JsonSchema)]

@@ -323,7 +323,9 @@ mod tests {
             ("error", error_block()),
         ];
         for (name, style) in blocks {
-            let bg = style.bg.unwrap_or_else(|| panic!("{name} block must define a background"));
+            let bg = style
+                .bg
+                .unwrap_or_else(|| panic!("{name} block must define a background"));
             assert!(
                 surfaces.contains(&bg),
                 "{name} block background must be a theme surface tone, got {bg:?}"

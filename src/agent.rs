@@ -79,13 +79,16 @@ pub enum AgentEvent {
 
 type AgentEventSender = tokio::sync::mpsc::UnboundedSender<AgentEvent>;
 type ChatFuture = Pin<Box<dyn Future<Output = Result<Vec<Message>, AgentError>> + Send>>;
-type ChatFn = dyn Fn(String, Arc<Vec<Message>>, AgentEventSender, watch::Receiver<bool>, u32) -> ChatFuture
+type ChatFn = dyn Fn(String, Arc<[Message]>, AgentEventSender, watch::Receiver<bool>, u32) -> ChatFuture
     + Send
     + Sync;
 
-fn cancel_return(tx: &AgentEventSender, history: &Arc<Vec<Message>>) -> Result<Vec<Message>, AgentError> {
+fn cancel_return(
+    tx: &AgentEventSender,
+    history: &Arc<[Message]>,
+) -> Result<Vec<Message>, AgentError> {
     let _ = tx.send(AgentEvent::Notice("Esc 已中断当前回答。".to_string()));
-    Ok((**history).clone())
+    Ok(history.to_vec())
 }
 
 fn ensure_section(current: &mut AgentSection, target: AgentSection, tx: &AgentEventSender) {
@@ -97,7 +100,7 @@ fn ensure_section(current: &mut AgentSection, target: AgentSection, tx: &AgentEv
 pub async fn stream_chat<M: CompletionModel + 'static>(
     agent: &rig::agent::Agent<M>,
     input: &str,
-    history: &Arc<Vec<Message>>,
+    history: &Arc<[Message]>,
     tx: AgentEventSender,
     mut cancel_rx: watch::Receiver<bool>,
     max_multi_turn: u32,
@@ -105,7 +108,7 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
     let mut section = AgentSection::Answer;
     let mut final_history: Option<Vec<Message>> = None;
     let stream_request = agent
-        .stream_chat(input, (**history).clone())
+        .stream_chat(input, history.to_vec())
         .multi_turn(max_multi_turn as usize);
     let mut stream = tokio::select! {
         biased;
@@ -147,12 +150,15 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                 let text: String = tool_result
                     .content
                     .iter()
-                    .filter_map(|c| match c {
-                        ToolResultContent::Text(t) => Some(t.text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                    .fold(String::new(), |mut acc, c| {
+                        if let ToolResultContent::Text(t) = c {
+                            if !acc.is_empty() {
+                                acc.push('\n');
+                            }
+                            acc.push_str(&t.text);
+                        }
+                        acc
+                    });
                 let _ = tx.send(AgentEvent::ToolResult(text));
             }
             Some(Ok(MultiTurnStreamItem::FinalResponse(final_response))) => {
@@ -169,7 +175,7 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
             None => break,
         }
     }
-    Ok(final_history.unwrap_or_else(|| (**history).clone()))
+    Ok(final_history.unwrap_or_else(|| history.to_vec()))
 }
 
 pub struct DynamicAgent {
@@ -181,7 +187,7 @@ impl DynamicAgent {
     pub async fn stream_chat(
         &self,
         input: &str,
-        history: Arc<Vec<Message>>,
+        history: Arc<[Message]>,
         tx: AgentEventSender,
         cancel_rx: watch::Receiver<bool>,
     ) -> Result<Vec<Message>, AgentError> {
@@ -262,7 +268,7 @@ macro_rules! providers {
                             );
                             return Ok(DynamicAgent {
                                 chat: Box::new(
-                                    move |input, history: Arc<Vec<Message>>, tx, cancel_rx, max_multi_turn| {
+                                    move |input, history: Arc<[Message]>, tx, cancel_rx, max_multi_turn| {
                                         let agent = Arc::clone(&inner);
                                         Box::pin(async move {
                                             crate::agent::stream_chat(

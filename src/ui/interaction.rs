@@ -19,10 +19,6 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io::{self, Stdout};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -66,16 +62,16 @@ impl Drop for TerminalModeGuard {
 }
 
 struct EventPump {
-    stop: Arc<AtomicBool>,
+    cancel: CancellationToken,
     handle: tokio::task::JoinHandle<()>,
 }
 
 impl EventPump {
     fn start(tx: tokio::sync::mpsc::UnboundedSender<io::Result<Event>>) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_worker = Arc::clone(&stop);
+        let cancel = CancellationToken::new();
+        let cancel_worker = cancel.clone();
         let handle = tokio::task::spawn_blocking(move || {
-            while !stop_worker.load(Ordering::Relaxed) {
+            while !cancel_worker.is_cancelled() {
                 match event::poll(Duration::from_millis(constants::POLL_INTERVAL_MS)) {
                     Ok(false) => {}
                     Ok(true) => match event::read() {
@@ -96,11 +92,11 @@ impl EventPump {
                 }
             }
         });
-        Self { stop, handle }
+        Self { cancel, handle }
     }
 
     async fn stop(self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.cancel.cancel();
         let _ = self.handle.await;
     }
 }

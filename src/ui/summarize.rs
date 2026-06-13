@@ -49,7 +49,7 @@ pub fn summarize_generic(value: &Value) -> String {
     let Some(obj) = value.as_object() else {
         return String::new();
     };
-    let mut parts = Vec::new();
+    let mut parts = Vec::with_capacity(3);
     for (k, v) in obj.iter().take(3) {
         match v {
             Value::String(s) => parts.push(format!("{k}={}", truncate_inline(s))),

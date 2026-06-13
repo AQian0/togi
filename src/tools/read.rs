@@ -159,7 +159,7 @@ impl Tool for Read {
         }
         let file_size = metadata.len();
 
-        let _large_warning = crate::common::check_file_size(&display, file_size)?;
+        crate::common::check_file_size(&display, file_size)?;
 
         let is_large = file_size > constants::LARGE_FILE_THRESHOLD;
         let offset_bytes = args.offset_bytes.unwrap_or(0);

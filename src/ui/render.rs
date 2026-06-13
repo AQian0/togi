@@ -258,8 +258,8 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
                     if *align == Align::Right {
                         // 气泡内容按 effective_width 折行，但右对齐到距右边缘
                         // USER_EDGE_MARGIN 处，使其紧贴右侧。
-                        let target = (conv_area.width as usize)
-                            .saturating_sub(constants::USER_EDGE_MARGIN);
+                        let target =
+                            (conv_area.width as usize).saturating_sub(constants::USER_EDGE_MARGIN);
                         let pad = target.saturating_sub(dw);
                         if pad > 0 {
                             spans.insert(0, Span::styled(" ".repeat(pad), Style::default()));

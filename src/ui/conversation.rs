@@ -320,7 +320,8 @@ impl Conversation {
 fn pad_block_runs(
     lines: Vec<(Line<'static>, Align, Option<BlockStyle>)>,
 ) -> Vec<(Line<'static>, Align, Option<BlockStyle>)> {
-    let mut out: Vec<(Line<'static>, Align, Option<BlockStyle>)> = Vec::with_capacity(lines.len() + 8);
+    let mut out: Vec<(Line<'static>, Align, Option<BlockStyle>)> =
+        Vec::with_capacity(lines.len() + 8);
     // 当前已打开（已补上顶部内边距）的左对齐块。
     let mut open: Option<BlockStyle> = None;
     for (line, align, block) in lines {
@@ -396,10 +397,7 @@ mod tests {
     use crate::ui::output::{ErrorInfo, OutputItem};
     use crate::ui::style;
 
-    fn has_block_bg(
-        conv: &super::Conversation,
-        want: Option<ratatui::style::Color>,
-    ) -> bool {
+    fn has_block_bg(conv: &super::Conversation, want: Option<ratatui::style::Color>) -> bool {
         conv.all_lines_with_align()
             .iter()
             .any(|(_, _, block)| block.map(|b| b.bg) == Some(want))

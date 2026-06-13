@@ -3,13 +3,13 @@ use crate::command::Args;
 use crate::constants;
 use crate::inject::{CWD_PARAM, Injection, inject};
 use crate::paginate::paginate;
+use crate::tools::ToolEffect;
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
 use crate::ui::interaction::{OutputItem, SectionKind, Session};
 use crate::ui::output::ErrorInfo;
 use crate::ui::theme::CatppuccinFlavor;
-use crate::tools::ToolEffect;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;
 use rig::tool::ToolDyn;
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-type History = Arc<RwLock<Arc<Vec<Message>>>>;
+type History = Arc<RwLock<Arc<[Message]>>>;
 type UiSender = mpsc::UnboundedSender<OutputItem>;
 
 #[derive(Clone)]
@@ -87,7 +87,7 @@ impl AppController {
 
         match result {
             Ok(updated_history) => {
-                *self.history.write().await = Arc::new(updated_history);
+                *self.history.write().await = Arc::from(updated_history);
                 let _ = tx.send(OutputItem::Done);
             }
             Err(err) => {
@@ -200,7 +200,7 @@ pub async fn run() -> crate::error::Result<()> {
 
     let cwd = std::env::current_dir()?;
     let agent = Arc::new(build_agent(&args, &config, build_tools(&cwd))?);
-    let history = Arc::new(RwLock::new(Arc::new(Vec::new())));
+    let history = Arc::new(RwLock::new(Arc::from(Vec::new())));
     let mut session = Session::new()?;
 
     let global_cancel = CancellationToken::new();

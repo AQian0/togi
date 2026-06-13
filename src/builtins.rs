@@ -3,25 +3,26 @@ use rig::message::Message;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
+static HELP_ROWS: &[(&str, &str)] = &[
+    ("/help", "显示这份帮助"),
+    ("/clear", "清空对话历史并重置屏幕"),
+    ("/cwd", "显示当前工作目录"),
+    (
+        "/exit、/quit",
+        "退出（也可用 exit / quit / 退出 或 Ctrl-C）",
+    ),
+];
+
 pub async fn handle_command(
     line: &str,
     tx: mpsc::UnboundedSender<OutputItem>,
-    history: &Arc<RwLock<Arc<Vec<Message>>>>,
+    history: &Arc<RwLock<Arc<[Message]>>>,
 ) -> bool {
     match line {
         "/help" => {
             send_notice(&tx, "");
             send_notice(&tx, "可用命令");
-            let rows = [
-                ("/help", "显示这份帮助"),
-                ("/clear", "清空对话历史并重置屏幕"),
-                ("/cwd", "显示当前工作目录"),
-                (
-                    "/exit、/quit",
-                    "退出（也可用 exit / quit / 退出 或 Ctrl-C）",
-                ),
-            ];
-            for (cmd, desc) in rows {
+            for (cmd, desc) in HELP_ROWS {
                 send_notice(&tx, &format!("  {cmd:<14}{desc}"));
             }
             send_notice(&tx, "");
@@ -34,7 +35,7 @@ pub async fn handle_command(
         "/clear" => {
             let mut guard = history.write().await;
             let count = guard.len();
-            *guard = Arc::new(Vec::new());
+            *guard = Arc::from(Vec::new());
             send_notice(&tx, &format!("已清空对话历史（共 {count} 条消息）。"));
         }
         "/cwd" => {

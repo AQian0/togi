@@ -111,9 +111,8 @@ impl TogiError for FileTooLargeError {
     }
 }
 
-/// 检查文件大小，超过 `MAX_FILE_SIZE` 返回 `FileTooLargeError`，
-/// 超过 `LARGE_FILE_THRESHOLD` 返回 `Some(size)` 作为警告标记。
-pub(crate) fn check_file_size(path: &str, size: u64) -> Result<Option<u64>, FileTooLargeError> {
+/// 检查文件大小，超过 `MAX_FILE_SIZE` 返回 `FileTooLargeError`。
+pub(crate) fn check_file_size(path: &str, size: u64) -> Result<(), FileTooLargeError> {
     if size > constants::MAX_FILE_SIZE {
         return Err(FileTooLargeError {
             path: path.to_string(),
@@ -121,11 +120,7 @@ pub(crate) fn check_file_size(path: &str, size: u64) -> Result<Option<u64>, File
             max: constants::MAX_FILE_SIZE,
         });
     }
-    if size > constants::LARGE_FILE_THRESHOLD {
-        Ok(Some(size))
-    } else {
-        Ok(None)
-    }
+    Ok(())
 }
 
 /// 统一的截断提示。
