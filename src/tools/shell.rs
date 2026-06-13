@@ -16,10 +16,57 @@ mod runner;
 #[derive(Clone, Copy, Default)]
 pub struct Shell;
 
+impl crate::tools::ClassifyEffect for Shell {
+    fn effect(args: &serde_json::Value) -> crate::tools::ToolEffect {
+        let is_query = args
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(is_query_command);
+        if is_query {
+            crate::tools::ToolEffect::ReadOnly
+        } else {
+            crate::tools::ToolEffect::Mutating
+        }
+    }
+}
+
 impl Shell {
     fn resolve_cwd(cwd: Option<&Path>) -> Result<PathBuf, ShellError> {
         cwd.map(Path::to_path_buf).ok_or(ShellError::MissingCwd)
     }
+}
+
+/// 常见的“纯查询 / 只读”命令白名单。只纳入明确无副作用的命令
+/// （故意排除 `sed`/`awk`/`tee` 等可写入的命令）。
+const READ_ONLY_COMMANDS: &[&str] = &[
+    "ls", "cat", "head", "tail", "wc", "stat", "file", "tree", "find", "grep", "rg", "egrep",
+    "fgrep", "pwd", "which", "whoami", "date", "du", "df", "echo", "dirname", "basename",
+    "realpath", "readlink", "sort", "uniq", "cut", "nl", "diff",
+];
+
+/// 判断一条 shell 命令是否为“纯查询”（只读）命令。
+///
+/// 仅用于决定结果在对话区的展示方式（隐藏冗长输出），不影响命令执行；
+/// 因此采用保守的白名单：命令序列 / 管道中的每一段，其首词都必须是已知
+/// 只读命令，且不含输出重定向。无法确定时一律按有副作用处理（照常展示）。
+fn is_query_command(command: &str) -> bool {
+    let command = command.trim();
+    // 任何输出重定向都可能写文件，视为有副作用。
+    if command.is_empty() || command.contains('>') {
+        return false;
+    }
+    let segments: Vec<&str> = command
+        .split(['|', ';', '&'])
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    !segments.is_empty()
+        && segments.iter().all(|segment| {
+            segment
+                .split_whitespace()
+                .next()
+                .is_some_and(|head| READ_ONLY_COMMANDS.contains(&head))
+        })
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -148,5 +195,48 @@ impl Tool for Shell {
         }
 
         runner::run_separated(command, &cwd, duration, env).await
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::is_query_command;
+
+    #[test]
+    fn plain_read_only_commands_are_queries() {
+        assert!(is_query_command("ls -la"));
+        assert!(is_query_command("cat src/main.rs"));
+        assert!(is_query_command("grep -rn TODO ."));
+    }
+
+    #[test]
+    fn read_only_pipelines_and_sequences_are_queries() {
+        assert!(is_query_command("cat foo | grep bar"));
+        assert!(is_query_command("ls; pwd"));
+    }
+
+    #[test]
+    fn mutating_commands_are_not_queries() {
+        assert!(!is_query_command("rm -rf target"));
+        assert!(!is_query_command("git commit -m x"));
+        assert!(!is_query_command("cargo build"));
+    }
+
+    #[test]
+    fn redirection_disqualifies_a_query() {
+        assert!(!is_query_command("cat foo > bar"));
+        assert!(!is_query_command("echo hi >> log"));
+    }
+
+    #[test]
+    fn any_mutating_segment_disqualifies_the_whole() {
+        assert!(!is_query_command("ls && rm foo"));
+        assert!(!is_query_command("cat foo | tee out"));
+    }
+
+    #[test]
+    fn empty_command_is_not_a_query() {
+        assert!(!is_query_command(""));
+        assert!(!is_query_command("   "));
     }
 }

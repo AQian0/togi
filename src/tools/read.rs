@@ -16,6 +16,13 @@ mod text;
 #[derive(Clone, Copy, Default)]
 pub struct Read;
 
+impl crate::tools::ClassifyEffect for Read {
+    fn effect(_args: &serde_json::Value) -> crate::tools::ToolEffect {
+        // 读取文件永远是只读操作。
+        crate::tools::ToolEffect::ReadOnly
+    }
+}
+
 impl Read {
     fn resolve(cwd: Option<&Path>, raw_path: &str) -> Result<PathBuf, ReadError> {
         resolve_tool_path(cwd, raw_path).map_err(|e| match e {

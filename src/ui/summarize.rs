@@ -60,6 +60,25 @@ pub fn summarize_generic(value: &Value) -> String {
     }
     parts.join(" ")
 }
+/// 为只读 / 查询类工具（如 `read`、`shell` 的纯查询命令）的结果
+/// 生成不含具体内容的简短摘要。
+///
+/// 多行结果折叠为行数说明（隐藏具体输出）；单行结果（错误信息、
+/// 空文件标记、极短输出等）原样返回，以便错误等状态仍能展示给用户。
+///
+/// 注意：这只影响对话区的展示，完整内容仍由 rig 内部交给模型，不受影响。
+pub fn summarize_readonly_result(text: &str) -> String {
+    if text.trim().is_empty() {
+        return String::new();
+    }
+    let lines = text.lines().count();
+    if lines <= 1 {
+        text.trim_end().to_string()
+    } else {
+        format!("（已读取 {lines} 行，内容已省略）")
+    }
+}
+
 pub fn truncate_inline(text: &str) -> String {
     let max = crate::constants::SUMMARY_MAX_INLINE_CHARS;
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -111,6 +130,23 @@ mod tests {
         let v = serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b"});
         assert_eq!(summarize_call("modify", &v), "a.txt · 替换");
     }
+    #[test]
+    fn readonly_result_collapses_multiline_content() {
+        let out = summarize_readonly_result("1 | foo\n2 | bar\n3 | baz");
+        assert_eq!(out, "（已读取 3 行，内容已省略）");
+    }
+
+    #[test]
+    fn readonly_result_keeps_single_line_errors() {
+        let err = "no such file: `missing.rs`. Double-check the path, then retry.";
+        assert_eq!(summarize_readonly_result(err), err);
+    }
+
+    #[test]
+    fn readonly_result_blank_is_empty() {
+        assert_eq!(summarize_readonly_result("   "), "");
+    }
+
     #[test]
     fn generic_summary_joins_scalars() {
         let v = serde_json::json!({"name": "x", "n": 3, "flag": true});

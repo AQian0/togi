@@ -9,9 +9,11 @@ use crate::tools::shell::Shell;
 use crate::ui::interaction::{OutputItem, SectionKind, Session};
 use crate::ui::output::ErrorInfo;
 use crate::ui::theme::CatppuccinFlavor;
+use crate::tools::ToolEffect;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;
 use rig::tool::ToolDyn;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, watch};
@@ -65,8 +67,10 @@ impl AppController {
         let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
         let ui_tx = tx.clone();
         let forward_task = tokio::spawn(async move {
+            // 工具调用与结果在流中严格 1:1 交替出现，用 FIFO 队列将结果对应到来源调用的副作用类别。
+            let mut pending_effects: VecDeque<ToolEffect> = VecDeque::new();
             while let Some(event) = agent_rx.recv().await {
-                let _ = ui_tx.send(output_from_agent_event(event));
+                let _ = ui_tx.send(output_from_agent_event(event, &mut pending_effects));
             }
         });
 
@@ -94,7 +98,10 @@ impl AppController {
     }
 }
 
-fn output_from_agent_event(event: AgentEvent) -> OutputItem {
+fn output_from_agent_event(
+    event: AgentEvent,
+    pending_effects: &mut VecDeque<ToolEffect>,
+) -> OutputItem {
     match event {
         AgentEvent::Section(section) => OutputItem::Section(match section {
             AgentSection::Reasoning => SectionKind::Reasoning,
@@ -103,9 +110,18 @@ fn output_from_agent_event(event: AgentEvent) -> OutputItem {
         AgentEvent::Text(text) => OutputItem::Chunk(text),
         AgentEvent::ToolCall { name, arguments } => {
             let summary = crate::ui::summarize::summarize_call(&name, &arguments);
+            pending_effects.push_back(crate::tools::classify_call(&name, &arguments));
             OutputItem::ToolCall { name, summary }
         }
-        AgentEvent::ToolResult(text) => OutputItem::ToolResult(text),
+        AgentEvent::ToolResult(text) => {
+            match pending_effects.pop_front().unwrap_or(ToolEffect::Mutating) {
+                // 只读 / 查询：仅展示行为与简短摘要，不在对话区铺开具体内容。
+                ToolEffect::ReadOnly => {
+                    OutputItem::ToolResult(crate::ui::summarize::summarize_readonly_result(&text))
+                }
+                ToolEffect::Mutating => OutputItem::ToolResult(text),
+            }
+        }
         AgentEvent::Notice(text) => OutputItem::Notice(text),
     }
 }

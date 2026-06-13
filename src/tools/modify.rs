@@ -196,6 +196,9 @@ impl TogiError for ModifyError {
 #[derive(Clone, Copy, Default)]
 pub struct Modify;
 
+// Modify 始终有副作用（写入 / 编辑），沿用默认的 `Mutating`。
+impl crate::tools::ClassifyEffect for Modify {}
+
 impl Modify {
     fn resolve(cwd: Option<&Path>, raw_path: &str) -> Result<PathBuf, ModifyError> {
         resolve_tool_path(cwd, raw_path).map_err(|e| match e {
