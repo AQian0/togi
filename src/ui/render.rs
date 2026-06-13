@@ -250,22 +250,26 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
                     }
 
                     let block_bg = block.and_then(|bs| bs.bg);
-                    spans.extend(rline.spans.iter().map(|s| {
-                        Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
-                    }));
 
                     if *align == Align::Right {
                         let target =
                             (conv_area.width as usize).saturating_sub(constants::USER_EDGE_MARGIN);
                         let pad = target.saturating_sub(dw);
                         if pad > 0 {
-                            spans.insert(0, Span::styled(" ".repeat(pad), Style::default()));
+                            let pad_style = if let Some(bg) = block_bg {
+                                Style::default().bg(bg)
+                            } else {
+                                Style::default()
+                            };
+                            spans.push(Span::styled(" ".repeat(pad), pad_style));
                         }
                     }
 
-                    if *align == Align::Left
-                        && let Some(bg_color) = block_bg
-                    {
+                    spans.extend(rline.spans.iter().map(|s| {
+                        Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
+                    }));
+
+                    if let Some(bg_color) = block_bg {
                         let full_width = conv_area.width as usize;
                         let current_w: usize = spans
                             .iter()

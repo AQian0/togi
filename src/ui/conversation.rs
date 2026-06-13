@@ -147,13 +147,20 @@ impl Conversation {
         self.md_block = None;
         self.items.push(ConvItem::Line(ConvLine::empty()));
         let user_style = style::user_block();
+        let blk = BlockStyle {
+            gutter: style::gutter_of(user_style),
+            bg: user_style.bg,
+        };
         self.items.push(ConvItem::Line(ConvLine {
-            spans: vec![(format!(" {text} "), user_style)],
+            spans: vec![("用户".to_string(), user_style)],
             align: Align::Right,
-            block: Some(BlockStyle {
-                gutter: style::gutter_of(user_style),
-                bg: user_style.bg,
-            }),
+            block: Some(blk),
+        }));
+        let text_style = user_style.fg(Color::Black);
+        self.items.push(ConvItem::Line(ConvLine {
+            spans: vec![(text.to_string(), text_style)],
+            align: Align::Right,
+            block: Some(blk),
         }));
     }
 
@@ -315,17 +322,17 @@ impl Conversation {
     }
 }
 
-/// 为每个连续的左对齐块（同一 [`BlockStyle`]）的首尾各插入一行“同色空行”，
-/// 从而在色块内部形成上下内边距（card 观感）。右对齐的用户气泡不参与填充。
+/// 为每个连续块（同一 [`BlockStyle`]）的首尾各插入一行"同色空行"，
+/// 从而在色块内部形成上下内边距（card 观感）。
 fn pad_block_runs(
     lines: Vec<(Line<'static>, Align, Option<BlockStyle>)>,
 ) -> Vec<(Line<'static>, Align, Option<BlockStyle>)> {
     let mut out: Vec<(Line<'static>, Align, Option<BlockStyle>)> =
         Vec::with_capacity(lines.len() + 8);
-    // 当前已打开（已补上顶部内边距）的左对齐块。
+    // 当前已打开（已补上顶部内边距）的块。
     let mut open: Option<BlockStyle> = None;
     for (line, align, block) in lines {
-        let run = if align == Align::Left { block } else { None };
+        let run = block;
         if open != run {
             if let Some(prev) = open {
                 out.push((Line::from(""), Align::Left, Some(prev)));
@@ -458,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn right_aligned_bubble_is_not_padded() {
+    fn right_aligned_block_also_gets_padding() {
         use ratatui::style::Color;
         use ratatui::text::Line;
         let block = super::BlockStyle {
@@ -467,7 +474,10 @@ mod tests {
         };
         let input = vec![(Line::from("hi"), super::Align::Right, Some(block))];
         let out = super::pad_block_runs(input);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].1, super::Align::Right);
+        // 顶部内边距 + 内容 + 底部内边距
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].2, Some(block), "首行应为同色顶部内边距");
+        assert_eq!(out[1].1, super::Align::Right, "内容行保持右对齐");
+        assert_eq!(out[2].2, Some(block), "末行应为同色底部内边距");
     }
 }
