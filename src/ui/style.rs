@@ -31,40 +31,50 @@ pub fn separator() -> Style {
     Style::default().bg(c().base).fg(c().surface1)
 }
 
-pub fn error() -> Style {
-    Style::default().fg(c().red)
-}
+// 角色块的背景统一使用主题自带的表面色阶（base / mantle / surface0 / surface1），
+// 不做任何颜色计算；各角色由主题强调色的前景 / 左侧竖条加以区分。
 
 pub fn assistant_block() -> Style {
     Style::default()
-        .bg(c().mantle)
+        .bg(c().base)
         .fg(c().green)
         .add_modifier(Modifier::BOLD)
 }
 
 pub fn thinking_block() -> Style {
     Style::default()
-        .bg(c().base)
+        .bg(c().mantle)
         .fg(c().overlay1)
         .add_modifier(Modifier::ITALIC)
 }
 
 pub fn user_block() -> Style {
     Style::default()
-        .bg(c().surface0)
+        .bg(c().surface1)
         .fg(c().blue)
         .add_modifier(Modifier::BOLD)
 }
 
+pub fn system_block() -> Style {
+    Style::default().bg(c().surface0).fg(c().mauve)
+}
+
 pub fn tool_call_block() -> Style {
     Style::default()
-        .bg(c().mantle)
-        .fg(c().text)
+        .bg(c().surface0)
+        .fg(c().peach)
         .add_modifier(Modifier::BOLD)
 }
 
 pub fn tool_result_block() -> Style {
     Style::default().bg(c().mantle).fg(c().subtext0)
+}
+
+pub fn error_block() -> Style {
+    Style::default()
+        .bg(c().surface0)
+        .fg(c().red)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn gutter_of(style: Style) -> Color {
@@ -286,4 +296,48 @@ pub fn find_syntax(lang: &str) -> Option<&'static syntect::parsing::SyntaxRefere
     ss.find_syntax_by_token(lang)
         .or_else(|| ss.find_syntax_by_extension(lang))
         .or_else(|| ss.find_syntax_by_first_line(lang))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_block_backgrounds_come_from_theme_palette() {
+        let palette = c();
+        let surfaces = [
+            palette.base,
+            palette.mantle,
+            palette.crust,
+            palette.surface0,
+            palette.surface1,
+            palette.surface2,
+        ];
+        let blocks = [
+            ("user", user_block()),
+            ("assistant", assistant_block()),
+            ("thinking", thinking_block()),
+            ("system", system_block()),
+            ("tool_call", tool_call_block()),
+            ("tool_result", tool_result_block()),
+            ("error", error_block()),
+        ];
+        for (name, style) in blocks {
+            let bg = style.bg.unwrap_or_else(|| panic!("{name} block must define a background"));
+            assert!(
+                surfaces.contains(&bg),
+                "{name} block background must be a theme surface tone, got {bg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn role_gutters_use_theme_accents() {
+        // 区分各角色的是主题强调色的前景 / 竖条，而非背景。
+        assert_eq!(gutter_of(user_block()), c().blue);
+        assert_eq!(gutter_of(assistant_block()), c().green);
+        assert_eq!(gutter_of(system_block()), c().mauve);
+        assert_eq!(gutter_of(tool_call_block()), c().peach);
+        assert_eq!(gutter_of(error_block()), c().red);
+    }
 }

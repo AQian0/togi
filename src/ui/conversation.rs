@@ -6,14 +6,14 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 /// 对话消息的水平对齐方式。
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Align {
     Left,
     Right,
 }
 
-/// 块状输出的视觉样式：有背景时渲染为全宽色块，否则退化为左侧竖条。
-#[derive(Clone, Copy)]
+/// 块状输出的视觉样式：左侧强调竖条颜色 + 可选背景色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BlockStyle {
     pub gutter: Color,
     pub bg: Option<Color>,
@@ -39,14 +39,6 @@ pub(crate) struct MarkdownRenderResult {
 }
 
 impl ConvLine {
-    fn styled(text: impl Into<String>, style: Style) -> Self {
-        Self {
-            spans: vec![(text.into(), style)],
-            align: Align::Left,
-            block: None,
-        }
-    }
-
     fn block(text: impl Into<String>, style: Style, block: BlockStyle) -> Self {
         Self {
             spans: vec![(text.into(), style)],
@@ -196,7 +188,7 @@ impl Conversation {
                 }
             }
         }
-        out
+        pad_block_runs(out)
     }
 
     /// 应用输出事件。返回 true 表示当前回答完成。
@@ -287,20 +279,29 @@ impl Conversation {
             OutputItem::Notice(text) => {
                 self.flush_md();
                 self.md_block = None;
-                self.items
-                    .push(ConvItem::Line(ConvLine::styled(text, style::dim())));
+                if text.trim().is_empty() {
+                    self.items.push(ConvItem::Line(ConvLine::empty()));
+                } else {
+                    self.items.push(ConvItem::Line(ConvLine::block(
+                        text,
+                        style::system_block(),
+                        block_system(),
+                    )));
+                }
                 false
             }
             OutputItem::Error(info) => {
                 self.flush_md();
                 self.md_block = None;
                 let retry = if info.retryable { " · 可重试" } else { "" };
-                self.items.push(ConvItem::Line(ConvLine::styled(
+                self.items.push(ConvItem::Line(ConvLine::empty()));
+                self.items.push(ConvItem::Line(ConvLine::block(
                     format!(
                         "!! [{} · {:?}{retry}] {}",
                         info.code, info.kind, info.message
                     ),
-                    style::error(),
+                    style::error_block(),
+                    block_error(),
                 )));
                 false
             }
@@ -312,6 +313,33 @@ impl Conversation {
             }
         }
     }
+}
+
+/// 为每个连续的左对齐块（同一 [`BlockStyle`]）的首尾各插入一行“同色空行”，
+/// 从而在色块内部形成上下内边距（card 观感）。右对齐的用户气泡不参与填充。
+fn pad_block_runs(
+    lines: Vec<(Line<'static>, Align, Option<BlockStyle>)>,
+) -> Vec<(Line<'static>, Align, Option<BlockStyle>)> {
+    let mut out: Vec<(Line<'static>, Align, Option<BlockStyle>)> = Vec::with_capacity(lines.len() + 8);
+    // 当前已打开（已补上顶部内边距）的左对齐块。
+    let mut open: Option<BlockStyle> = None;
+    for (line, align, block) in lines {
+        let run = if align == Align::Left { block } else { None };
+        if open != run {
+            if let Some(prev) = open {
+                out.push((Line::from(""), Align::Left, Some(prev)));
+            }
+            if let Some(next) = run {
+                out.push((Line::from(""), Align::Left, Some(next)));
+            }
+            open = run;
+        }
+        out.push((line, align, block));
+    }
+    if let Some(prev) = open {
+        out.push((Line::from(""), Align::Left, Some(prev)));
+    }
+    out
 }
 
 fn block_reasoning() -> BlockStyle {
@@ -343,5 +371,105 @@ fn block_tool_result() -> BlockStyle {
     BlockStyle {
         gutter: style::gutter_of(role),
         bg: role.bg,
+    }
+}
+
+fn block_system() -> BlockStyle {
+    let role = style::system_block();
+    BlockStyle {
+        gutter: style::gutter_of(role),
+        bg: role.bg,
+    }
+}
+
+fn block_error() -> BlockStyle {
+    let role = style::error_block();
+    BlockStyle {
+        gutter: style::gutter_of(role),
+        bg: role.bg,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::ErrorKind;
+    use crate::ui::output::{ErrorInfo, OutputItem};
+    use crate::ui::style;
+
+    fn has_block_bg(
+        conv: &super::Conversation,
+        want: Option<ratatui::style::Color>,
+    ) -> bool {
+        conv.all_lines_with_align()
+            .iter()
+            .any(|(_, _, block)| block.map(|b| b.bg) == Some(want))
+    }
+
+    #[test]
+    fn notice_renders_as_system_block() {
+        let mut conv = super::Conversation::new();
+        conv.apply_output(OutputItem::Notice("系统提示".to_string()));
+        assert!(has_block_bg(&conv, style::system_block().bg));
+    }
+
+    #[test]
+    fn blank_notice_stays_plain() {
+        let mut conv = super::Conversation::new();
+        conv.apply_output(OutputItem::Notice("   ".to_string()));
+        assert!(
+            conv.all_lines_with_align()
+                .iter()
+                .all(|(_, _, block)| block.is_none())
+        );
+    }
+
+    #[test]
+    fn error_renders_as_error_block() {
+        let mut conv = super::Conversation::new();
+        conv.apply_output(OutputItem::Error(ErrorInfo {
+            code: "test.boom",
+            kind: ErrorKind::Io,
+            retryable: true,
+            message: "boom".to_string(),
+        }));
+        assert!(has_block_bg(&conv, style::error_block().bg));
+    }
+
+    #[test]
+    fn left_block_run_gets_top_and_bottom_padding() {
+        use ratatui::style::Color;
+        use ratatui::text::Line;
+        let block = super::BlockStyle {
+            gutter: Color::Red,
+            bg: Some(Color::Blue),
+        };
+        let input = vec![
+            (Line::from("header"), super::Align::Left, Some(block)),
+            (Line::from("body"), super::Align::Left, Some(block)),
+        ];
+        let out = super::pad_block_runs(input);
+        // 顶部内边距 + header + body + 底部内边距
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0].2, Some(block), "首行应为同色顶部内边距");
+        assert_eq!(out[3].2, Some(block), "末行应为同色底部内边距");
+        let middle: Vec<String> = out[1..3]
+            .iter()
+            .map(|(line, _, _)| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(middle, vec!["header".to_string(), "body".to_string()]);
+    }
+
+    #[test]
+    fn right_aligned_bubble_is_not_padded() {
+        use ratatui::style::Color;
+        use ratatui::text::Line;
+        let block = super::BlockStyle {
+            gutter: Color::Blue,
+            bg: Some(Color::Blue),
+        };
+        let input = vec![(Line::from("hi"), super::Align::Right, Some(block))];
+        let out = super::pad_block_runs(input);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1, super::Align::Right);
     }
 }

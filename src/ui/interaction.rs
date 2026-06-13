@@ -246,11 +246,9 @@ impl Session {
                 }
             }
             Event::Mouse(_) => {}
-            Event::Paste(data) => {
-                if !self.submitting {
-                    self.detach_history();
-                    self.editor.insert_str(&data);
-                }
+            Event::Paste(data) if !self.submitting => {
+                self.detach_history();
+                self.editor.insert_str(&data);
             }
             Event::Resize(_, _) => {}
             _ => {}

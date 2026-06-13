@@ -43,11 +43,19 @@ pub(crate) const MIN_TERMINAL_WIDTH: u16 = 6;
 /// 终端最小渲染高度。
 pub(crate) const MIN_TERMINAL_HEIGHT: u16 = 4;
 
-/// 用户消息右边距（字符数）。
+/// 用户气泡的最大内容宽度相对终端宽度预留的左侧空间（字符数）。
+///
+/// 用于限制气泡宽度，使较长的用户消息折行成右侧的一列，而非铺满整行。
 pub(crate) const USER_MARGIN: usize = 20;
+
+/// 用户气泡距终端右边缘的外边距（字符数）。
+pub(crate) const USER_EDGE_MARGIN: usize = 2;
 
 /// 左侧块竖条 + 内边距宽度。
 pub(crate) const GUTTER_W: usize = 2;
+
+/// 块右侧内边距（字符数）：正文在此宽度处提前折行，背景色仍铺满到右边缘。
+pub(crate) const BLOCK_RIGHT_PAD: usize = 2;
 
 /// Markdown 水平线宽度。
 pub(crate) const HORIZONTAL_RULE_WIDTH: usize = 60;

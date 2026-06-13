@@ -11,7 +11,6 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
-const BLOCK_PAD: &str = "  ";
 const GUTTER_MARK: &str = "▎ ";
 
 /// 计算单个字符在终端中占用的列宽。
@@ -154,16 +153,12 @@ fn with_block_background(style: Style, bg: Option<Color>) -> Style {
 }
 
 fn block_gutter_span(block: BlockStyle) -> Span<'static> {
-    let text = if block.bg.is_some() {
-        BLOCK_PAD
-    } else {
-        GUTTER_MARK
-    };
+    // 始终绘制左侧强调竖条（即便块有背景色），使每个角色块都有一条贯穿全高的色条。
     let mut gutter_style = Style::default().fg(block.gutter);
     if let Some(bg) = block.bg {
         gutter_style = gutter_style.bg(bg);
     }
-    Span::styled(text, gutter_style)
+    Span::styled(GUTTER_MARK, gutter_style)
 }
 
 pub(crate) struct FrameRenderState<'a> {
@@ -227,7 +222,7 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
         for (line, align, block) in conv_lines {
             let gutter = if *align == Align::Right { None } else { *block };
             let reserve = if gutter.is_some() {
-                constants::GUTTER_W
+                constants::GUTTER_W + constants::BLOCK_RIGHT_PAD
             } else {
                 0
             };
@@ -261,7 +256,11 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
                     }));
 
                     if *align == Align::Right {
-                        let pad = effective_width.saturating_sub(dw);
+                        // 气泡内容按 effective_width 折行，但右对齐到距右边缘
+                        // USER_EDGE_MARGIN 处，使其紧贴右侧。
+                        let target = (conv_area.width as usize)
+                            .saturating_sub(constants::USER_EDGE_MARGIN);
+                        let pad = target.saturating_sub(dw);
                         if pad > 0 {
                             spans.insert(0, Span::styled(" ".repeat(pad), Style::default()));
                         }
