@@ -16,10 +16,10 @@ use rig::tool::ToolDyn;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{RwLock, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-type History = Arc<Mutex<Vec<Message>>>;
+type History = Arc<RwLock<Arc<Vec<Message>>>>;
 type UiSender = mpsc::UnboundedSender<OutputItem>;
 
 #[derive(Clone)]
@@ -61,7 +61,7 @@ impl AppController {
             }
         }
 
-        let hist = self.history.lock().await.clone();
+        let hist = self.history.read().await.clone();
         let _ = self.cancel_tx.send_replace(false);
         let cancel_rx = self.cancel_tx.subscribe();
         let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -87,7 +87,7 @@ impl AppController {
 
         match result {
             Ok(updated_history) => {
-                *self.history.lock().await = updated_history;
+                *self.history.write().await = Arc::new(updated_history);
                 let _ = tx.send(OutputItem::Done);
             }
             Err(err) => {
@@ -200,7 +200,7 @@ pub async fn run() -> crate::error::Result<()> {
 
     let cwd = std::env::current_dir()?;
     let agent = Arc::new(build_agent(&args, &config, build_tools(&cwd))?);
-    let history = Arc::new(Mutex::new(Vec::new()));
+    let history = Arc::new(RwLock::new(Arc::new(Vec::new())));
     let mut session = Session::new()?;
 
     let global_cancel = CancellationToken::new();

@@ -1,12 +1,12 @@
 use crate::ui::interaction::OutputItem;
 use rig::message::Message;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{RwLock, mpsc};
 
 pub async fn handle_command(
     line: &str,
     tx: mpsc::UnboundedSender<OutputItem>,
-    history: &Arc<Mutex<Vec<Message>>>,
+    history: &Arc<RwLock<Arc<Vec<Message>>>>,
 ) -> bool {
     match line {
         "/help" => {
@@ -32,9 +32,9 @@ pub async fn handle_command(
             send_notice(&tx, "");
         }
         "/clear" => {
-            let mut hist = history.lock().await;
-            let count = hist.len();
-            hist.clear();
+            let mut guard = history.write().await;
+            let count = guard.len();
+            *guard = Arc::new(Vec::new());
             send_notice(&tx, &format!("已清空对话历史（共 {count} 条消息）。"));
         }
         "/cwd" => {

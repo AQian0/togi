@@ -29,7 +29,11 @@ pub(super) async fn run_separated(
 
     let status = match tokio::time::timeout(duration, child.wait()).await {
         Ok(Ok(status)) => status,
-        Ok(Err(source)) => return Err(ShellError::Io { source }),
+        Ok(Err(source)) => {
+            stdout_task.abort();
+            stderr_task.abort();
+            return Err(ShellError::Io { source });
+        }
         Err(_elapsed) => {
             process::kill_child(&mut child, child_id);
             stdout_task.abort();
