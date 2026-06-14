@@ -7741,6 +7741,7 @@ dependencies = [
  "clap",
  "dirs",
  "futures",
+ "itertools 0.14.0",
  "libc",
  "pulldown-cmark",
  "ratatui",
