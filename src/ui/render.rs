@@ -164,7 +164,7 @@ fn block_gutter_span(block: BlockStyle) -> Span<'static> {
 }
 
 pub(crate) struct FrameRenderState<'a> {
-    pub(crate) conv_lines: &'a [(Line<'static>, Align, Option<BlockStyle>)],
+    pub(crate) display_lines: &'a [Line<'static>],
     pub(crate) submitting: bool,
     pub(crate) conv_scroll_offset: usize,
     pub(crate) editor_lines: &'a [String],
@@ -179,9 +179,106 @@ pub(crate) struct FrameRenderState<'a> {
     pub(crate) normal_style: Style,
 }
 
+/// 将原始对话行（含对齐与块样式）展开为全宽度的最终显示行（已折行、已上色）。
+/// 结果供 [`render_frame`] 使用，并由 [`Conversation`] 缓存。
+pub(crate) fn build_display_lines(
+    conv_lines: &[(Line<'static>, Align, Option<BlockStyle>)],
+    conv_width: u16,
+) -> Vec<Line<'static>> {
+    let mut display_lines: Vec<Line<'static>> = Vec::new();
+    for (line, align, block) in conv_lines {
+        let gutter = if *align == Align::Right { None } else { *block };
+        let reserve = if gutter.is_some() {
+            constants::GUTTER_W + constants::BLOCK_RIGHT_PAD
+        } else {
+            0
+        };
+        let base_width = (conv_width as usize).saturating_sub(reserve).max(1);
+        let wrapped = wrap_line(line, base_width);
+        for wline in wrapped {
+            if *align == Align::Right {
+                let effective_width = conv_width
+                    .saturating_sub(constants::USER_MARGIN as u16) as usize;
+                let re_wrapped = wrap_line(&wline, effective_width.max(1));
+                for rline in re_wrapped {
+                    let dw: usize = rline
+                        .spans
+                        .iter()
+                        .flat_map(|s| s.content.chars())
+                        .map(display_width)
+                        .sum();
+                    let mut spans: Vec<Span> = Vec::new();
+                    if let Some(bs) = gutter {
+                        spans.push(block_gutter_span(bs));
+                    }
+                    let block_bg = block.and_then(|bs| bs.bg);
+                    if *align == Align::Right {
+                        let target =
+                            (conv_width as usize).saturating_sub(constants::USER_EDGE_MARGIN);
+                        let pad = target.saturating_sub(dw);
+                        if pad > 0 {
+                            let pad_style = if let Some(bg) = block_bg {
+                                Style::default().bg(bg)
+                            } else {
+                                Style::default()
+                            };
+                            spans.push(Span::styled(" ".repeat(pad), pad_style));
+                        }
+                    }
+                    spans.extend(rline.spans.iter().map(|s| {
+                        Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
+                    }));
+                    if let Some(bg_color) = block_bg {
+                        let full_width = conv_width as usize;
+                        let current_w: usize = spans
+                            .iter()
+                            .flat_map(|s| s.content.chars())
+                            .map(display_width)
+                            .sum();
+                        if current_w < full_width {
+                            spans.push(Span::styled(
+                                " ".repeat(full_width - current_w),
+                                Style::default().bg(bg_color),
+                            ));
+                        }
+                    }
+                    display_lines.push(Line::from(spans));
+                }
+            } else {
+                let mut spans: Vec<Span> = Vec::new();
+                if let Some(bs) = gutter {
+                    spans.push(block_gutter_span(bs));
+                }
+                let block_bg = block.and_then(|bs| bs.bg);
+                spans.extend(wline.spans.iter().map(|s| {
+                    Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
+                }));
+                if *align == Align::Left
+                    && let Some(bg_color) = block_bg
+                {
+                    let full_width = conv_width as usize;
+                    let current_w: usize = spans
+                        .iter()
+                        .flat_map(|s| s.content.chars())
+                        .map(display_width)
+                        .sum();
+                    if current_w < full_width {
+                        spans.push(Span::styled(
+                            " ".repeat(full_width - current_w),
+                            Style::default().bg(bg_color),
+                        ));
+                    }
+                }
+                display_lines.push(Line::from(spans));
+            }
+        }
+    }
+    display_lines
+}
+
 pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
     let FrameRenderState {
-        conv_lines,
+        display_lines,
         submitting,
         conv_scroll_offset,
         editor_lines,
@@ -220,108 +317,10 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
     let input_area = layout[1];
 
     {
-        let mut display_lines: Vec<Line<'static>> = Vec::new();
-        for (line, align, block) in conv_lines {
-            let gutter = if *align == Align::Right { None } else { *block };
-            let reserve = if gutter.is_some() {
-                constants::GUTTER_W + constants::BLOCK_RIGHT_PAD
-            } else {
-                0
-            };
-            let base_width = (conv_area.width as usize).saturating_sub(reserve).max(1);
-            let wrapped = wrap_line(line, base_width);
-            for wline in wrapped {
-                if *align == Align::Right {
-                    let effective_width = conv_area
-                        .width
-                        .saturating_sub(constants::USER_MARGIN as u16) as usize;
-                    let re_wrapped = wrap_line(&wline, effective_width.max(1));
-                    for rline in re_wrapped {
-                    let dw: usize = rline
-                        .spans
-                        .iter()
-                        .flat_map(|s| s.content.chars())
-                        .map(display_width)
-                        .sum();
-                    let mut spans: Vec<Span> = Vec::new();
-
-                    if let Some(bs) = gutter {
-                        spans.push(block_gutter_span(bs));
-                    }
-
-                    let block_bg = block.and_then(|bs| bs.bg);
-
-                    if *align == Align::Right {
-                        let target =
-                            (conv_area.width as usize).saturating_sub(constants::USER_EDGE_MARGIN);
-                        let pad = target.saturating_sub(dw);
-                        if pad > 0 {
-                            let pad_style = if let Some(bg) = block_bg {
-                                Style::default().bg(bg)
-                            } else {
-                                Style::default()
-                            };
-                            spans.push(Span::styled(" ".repeat(pad), pad_style));
-                        }
-                    }
-
-                    spans.extend(rline.spans.iter().map(|s| {
-                        Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
-                    }));
-
-                    if let Some(bg_color) = block_bg {
-                        let full_width = conv_area.width as usize;
-                        let current_w: usize = spans
-                            .iter()
-                            .flat_map(|s| s.content.chars())
-                            .map(display_width)
-                            .sum();
-                        if current_w < full_width {
-                            spans.push(Span::styled(
-                                " ".repeat(full_width - current_w),
-                                Style::default().bg(bg_color),
-                            ));
-                        }
-                    }
-                    display_lines.push(Line::from(spans));
-                    }
-                } else {
-                    let mut spans: Vec<Span> = Vec::new();
-
-                    if let Some(bs) = gutter {
-                        spans.push(block_gutter_span(bs));
-                    }
-
-                    let block_bg = block.and_then(|bs| bs.bg);
-                    spans.extend(wline.spans.iter().map(|s| {
-                        Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
-                    }));
-
-                    if *align == Align::Left
-                        && let Some(bg_color) = block_bg
-                    {
-                        let full_width = conv_area.width as usize;
-                        let current_w: usize = spans
-                            .iter()
-                            .flat_map(|s| s.content.chars())
-                            .map(display_width)
-                            .sum();
-                        if current_w < full_width {
-                            spans.push(Span::styled(
-                                " ".repeat(full_width - current_w),
-                                Style::default().bg(bg_color),
-                            ));
-                        }
-                    }
-                    display_lines.push(Line::from(spans));
-                }
-            }
-        }
-
         let total = display_lines.len();
         let visible = conv_area.height as usize;
         if total <= visible {
-            let mut final_lines = display_lines;
+            let mut final_lines: Vec<Line> = display_lines.iter().cloned().collect();
             if submitting {
                 final_lines.push(Line::from(""));
                 final_lines.push(Line::from(Span::styled(" …", dim_style)));
@@ -341,9 +340,10 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
             let scroll = auto_scroll.saturating_sub(conv_scroll_offset);
             let scroll = scroll.min(total.saturating_sub(content_vis));
             let mut final_lines: Vec<Line> = display_lines
-                .into_iter()
+                .iter()
                 .skip(scroll)
                 .take(content_vis)
+                .cloned()
                 .collect();
             if scrolled_up {
                 final_lines.push(Line::from(Span::styled(

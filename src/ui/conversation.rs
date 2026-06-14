@@ -73,6 +73,11 @@ pub(crate) struct Conversation {
     live_md_rendered_version: u64,
     live_md_rendered: Vec<Line<'static>>,
     live_md_render_inflight: Option<u64>,
+    // 显示行缓存：缓存已折行、已上色的最终显示行，避免每次渲染重建。
+    display_cache: Vec<Line<'static>>,
+    cache_term_width: u16,
+    cache_version: u64,
+    content_version: u64,
 }
 
 impl Conversation {
@@ -85,6 +90,10 @@ impl Conversation {
             live_md_rendered_version: 0,
             live_md_rendered: Vec::new(),
             live_md_render_inflight: None,
+            display_cache: Vec::new(),
+            cache_term_width: 0,
+            cache_version: 0,
+            content_version: 0,
         }
     }
 
@@ -135,11 +144,28 @@ impl Conversation {
         }
         self.live_md_rendered = result.lines;
         self.live_md_rendered_version = result.version;
+        self.bump_content_version();
         true
     }
 
     fn bump_md_version(&mut self) {
         self.md_version = self.md_version.wrapping_add(1);
+    }
+
+    fn bump_content_version(&mut self) {
+        self.content_version = self.content_version.wrapping_add(1);
+    }
+
+    /// 返回已缓存的全宽度显示行（已折行、已上色）。
+    /// 仅当内容或终端宽度变化时才重建缓存；纯滚动时只返回引用，O(1)。
+    pub(crate) fn cached_display_lines(&mut self, term_width: u16) -> &[Line<'static>] {
+        if self.cache_term_width != term_width || self.cache_version != self.content_version {
+            let raw = self.all_lines_with_align();
+            self.display_cache = crate::ui::render::build_display_lines(&raw, term_width);
+            self.cache_term_width = term_width;
+            self.cache_version = self.content_version;
+        }
+        &self.display_cache
     }
 
     pub(crate) fn push_user_message(&mut self, text: &str) {
@@ -162,6 +188,7 @@ impl Conversation {
             align: Align::Right,
             block: Some(blk),
         }));
+        self.bump_content_version();
     }
 
     /// 返回 (ratatui 行, 对齐方式, 所属块样式)。
@@ -200,7 +227,7 @@ impl Conversation {
 
     /// 应用输出事件。返回 true 表示当前回答完成。
     pub(crate) fn apply_output(&mut self, item: OutputItem) -> bool {
-        match item {
+        let done = match item {
             OutputItem::Section(kind) => {
                 self.flush_md();
                 self.items.push(ConvItem::Line(ConvLine::empty()));
@@ -318,7 +345,9 @@ impl Conversation {
                 self.items.push(ConvItem::Line(ConvLine::empty()));
                 true
             }
-        }
+        };
+        self.bump_content_version();
+        done
     }
 }
 

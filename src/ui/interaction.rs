@@ -10,8 +10,8 @@ use crate::ui::render::{self, prefix_width};
 use crate::ui::style;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event, KeyCode,
-    KeyEvent, KeyEventKind, KeyModifiers,
+    self, DisableBracketedPaste, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode,
+    KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -36,7 +36,7 @@ impl TerminalModeGuard {
             io::stdout(),
             EnterAlternateScreen,
             EnableBracketedPaste,
-            DisableMouseCapture
+            EnableMouseCapture
         ) {
             let _ = disable_raw_mode();
             return Err(err);
@@ -175,12 +175,41 @@ impl Session {
                         let Some(event) = maybe_event else {
                             break;
                         };
-                        if self.handle_terminal_event(event?, &out_tx, &mut on_submit).await {
+                        let event = event?;
+                        let is_scroll = matches!(&event, Event::Mouse(m) if matches!(m.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown));
+                        let is_other_mouse = matches!(&event, Event::Mouse(_));
+                        if self.handle_terminal_event(event, &out_tx, &mut on_submit).await {
                             quit = true;
                         }
-                        self.render()?;
-                        last_render = Instant::now();
-                        render_pending = false;
+                        if is_scroll {
+                            // 批量消费已排队的滚轮事件，使方向反转即时生效。
+                            while let Ok(ev) = event_rx.try_recv() {
+                                let Ok(ev) = ev else { break };
+                                match &ev {
+                                    Event::Mouse(m) if matches!(m.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) => {
+                                        if self.handle_terminal_event(ev, &out_tx, &mut on_submit).await {
+                                            quit = true;
+                                            break;
+                                        }
+                                    }
+                                    _ => {
+                                        // 遇到非滚轮事件，立即处理然后停止排空，
+                                        // 确保键盘事件不丢失即时渲染。
+                                        if self.handle_terminal_event(ev, &out_tx, &mut on_submit).await {
+                                            quit = true;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if is_other_mouse && !is_scroll {
+                            // 忽略非滚轮鼠标事件，不触发渲染。
+                        } else {
+                            self.render()?;
+                            last_render = Instant::now();
+                            render_pending = false;
+                        }
                     }
                     maybe_item = out_rx.recv() => {
                         let Some(item) = maybe_item else {
@@ -241,7 +270,17 @@ impl Session {
                     Action::Paste => self.paste_from_clipboard().await,
                 }
             }
-            Event::Mouse(_) => {}
+            Event::Mouse(mouse) => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        self.conv_scroll_offset = self.conv_scroll_offset.saturating_add(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        self.conv_scroll_offset = self.conv_scroll_offset.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+            }
             Event::Paste(data) if !self.submitting => {
                 self.detach_history();
                 self.editor.insert_str(&data);
@@ -415,7 +454,7 @@ impl Session {
     }
 
     fn render(&mut self) -> io::Result<()> {
-        let (_, term_h) = {
+        let (term_w, term_h) = {
             let size = self.terminal.size()?;
             (size.width, size.height)
         };
@@ -426,13 +465,13 @@ impl Session {
         let input_rows = self.editor.displayed_rows() as u16;
         let input_height = (input_rows + 2).min(term_h.saturating_sub(2));
         let visible_rows = input_height.saturating_sub(2) as usize;
-        let text_width = self.terminal.size()?.width as usize;
+        let text_width = term_w as usize;
 
         self.editor.ensure_row_visible(visible_rows);
         let cursor_line_len = prefix_width(&self.editor.lines[self.editor.row], self.editor.col);
         self.editor.ensure_col_visible(cursor_line_len, text_width);
 
-        let conv_lines = self.conv.all_lines_with_align();
+        let display_lines = self.conv.cached_display_lines(term_w);
         let submitting = self.submitting;
         let editor_lines = self.editor.lines.clone();
         let editor_row = self.editor.row;
@@ -445,7 +484,7 @@ impl Session {
             render::render_frame(
                 frame,
                 render::FrameRenderState {
-                    conv_lines: &conv_lines,
+                    display_lines,
                     submitting,
                     conv_scroll_offset: conv_scroll,
                     editor_lines: &editor_lines,
