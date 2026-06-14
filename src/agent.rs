@@ -1,5 +1,6 @@
 use crate::error::{ErrorKind, TogiError};
 use futures::StreamExt;
+use itertools::Itertools;
 use rig::agent::MultiTurnStreamItem;
 use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::CompletionModel;
@@ -147,15 +148,11 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                 let text: String = tool_result
                     .content
                     .iter()
-                    .fold(String::new(), |mut acc, c| {
-                        if let ToolResultContent::Text(t) = c {
-                            if !acc.is_empty() {
-                                acc.push('\n');
-                            }
-                            acc.push_str(&t.text);
-                        }
-                        acc
-                    });
+                    .filter_map(|c| match c {
+                        ToolResultContent::Text(t) => Some(t.text.as_str()),
+                        _ => None,
+                    })
+                    .join("\n");
                 let _ = tx.send(AgentEvent::ToolResult(text));
             }
             Some(Ok(MultiTurnStreamItem::FinalResponse(final_response))) => {

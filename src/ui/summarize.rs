@@ -2,6 +2,7 @@
 //!
 //! 原模块中的终端打印函数（banner, section_header 等）已迁移至 interaction.rs
 //! 的 ratatui 全屏渲染管线，本模块仅保留纯数据变换辅助。
+use itertools::Itertools;
 use serde_json::Value;
 pub fn summarize_call(name: &str, value: &Value) -> String {
     match name {
@@ -81,13 +82,7 @@ pub fn summarize_readonly_result(text: &str) -> String {
 
 pub fn truncate_inline(text: &str) -> String {
     let max = crate::constants::SUMMARY_MAX_INLINE_CHARS;
-    let mut collapsed = String::with_capacity(text.len());
-    for (i, word) in text.split_whitespace().enumerate() {
-        if i > 0 {
-            collapsed.push(' ');
-        }
-        collapsed.push_str(word);
-    }
+    let collapsed: String = text.split_whitespace().join(" ");
     let mut out: String = collapsed.chars().take(max).collect();
     if collapsed.chars().count() > max {
         out.push('…');

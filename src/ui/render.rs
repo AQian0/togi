@@ -13,6 +13,15 @@ use ratatui::widgets::{Block, Paragraph};
 
 const GUTTER_MARK: &str = "▎ ";
 
+/// 计算一组 Span 的总显示宽度。
+fn spans_display_width(spans: &[Span]) -> usize {
+    spans
+        .iter()
+        .flat_map(|s| s.content.chars())
+        .map(display_width)
+        .sum()
+}
+
 /// 计算单个字符在终端中占用的列宽。
 ///
 /// ASCII 字符占 1 列，CJK 等宽字符占 2 列，控制字符和零宽字符占 0 列。
@@ -201,12 +210,7 @@ pub(crate) fn build_display_lines(
                     .saturating_sub(constants::USER_MARGIN as u16) as usize;
                 let re_wrapped = wrap_line(&wline, effective_width.max(1));
                 for rline in re_wrapped {
-                    let dw: usize = rline
-                        .spans
-                        .iter()
-                        .flat_map(|s| s.content.chars())
-                        .map(display_width)
-                        .sum();
+                    let dw: usize = spans_display_width(&rline.spans);
                     let mut spans: Vec<Span> = Vec::new();
                     if let Some(bs) = gutter {
                         spans.push(block_gutter_span(bs));
@@ -230,11 +234,7 @@ pub(crate) fn build_display_lines(
                     }));
                     if let Some(bg_color) = block_bg {
                         let full_width = conv_width as usize;
-                        let current_w: usize = spans
-                            .iter()
-                            .flat_map(|s| s.content.chars())
-                            .map(display_width)
-                            .sum();
+                        let current_w: usize = spans_display_width(&spans);
                         if current_w < full_width {
                             spans.push(Span::styled(
                                 " ".repeat(full_width - current_w),
@@ -257,11 +257,7 @@ pub(crate) fn build_display_lines(
                     && let Some(bg_color) = block_bg
                 {
                     let full_width = conv_width as usize;
-                    let current_w: usize = spans
-                        .iter()
-                        .flat_map(|s| s.content.chars())
-                        .map(display_width)
-                        .sum();
+                    let current_w: usize = spans_display_width(&spans);
                     if current_w < full_width {
                         spans.push(Span::styled(
                             " ".repeat(full_width - current_w),

@@ -1,4 +1,5 @@
 use crate::common::parse_args_object;
+use itertools::Itertools;
 use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
@@ -103,7 +104,7 @@ fn paginate_text(
         .lines()
         .skip(start_idx)
         .take(end_idx - start_idx)
-        .collect();
+        .collect_vec();
     let mut out = String::with_capacity(text.len().min(16_384) + 96);
     let _ = writeln!(
         out,

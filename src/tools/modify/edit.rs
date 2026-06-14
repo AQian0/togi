@@ -1,6 +1,7 @@
 use super::{Modify, ModifyError};
 use crate::common::append_diff;
 use crate::constants;
+use itertools::Itertools;
 use similar::{DiffOp, TextDiff};
 use std::path::Path;
 use tokio::io::AsyncReadExt;
@@ -134,13 +135,12 @@ fn find_similar(content: &str, needle: &str) -> Option<String> {
     let content_lines: Vec<&str> = content.lines().collect();
 
     if needle_lines.len() == 1 {
-        let mut best: Option<(usize, usize)> = None;
-        for (i, line) in content_lines.iter().enumerate() {
-            let dist = levenshtein_distance(needle, line);
-            if dist <= max_dist && best.as_ref().is_none_or(|(_, d)| dist < *d) {
-                best = Some((i, dist));
-            }
-        }
+        let best = content_lines
+            .iter()
+            .enumerate()
+            .map(|(i, line)| (i, levenshtein_distance(needle, line)))
+            .filter(|(_, d)| *d <= max_dist)
+            .min_by_key(|(_, d)| *d);
         return best.map(|(i, dist)| {
             format!(
                 "did you mean line {}: `{}` ({} char{})?",
@@ -157,14 +157,13 @@ fn find_similar(content: &str, needle: &str) -> Option<String> {
         return None;
     }
     let joined_needle = needle_lines.join("\n");
-    let mut best: Option<(usize, usize)> = None;
-    for start in 0..=content_lines.len() - w {
-        let window = content_lines[start..start + w].join("\n");
-        let dist = levenshtein_distance(&joined_needle, &window);
-        if dist <= max_dist && best.as_ref().is_none_or(|(_, d)| dist < *d) {
-            best = Some((start, dist));
-        }
-    }
+    let best = (0..=content_lines.len() - w)
+        .map(|start| {
+            let window = content_lines[start..start + w].join("\n");
+            (start, levenshtein_distance(&joined_needle, &window))
+        })
+        .filter(|(_, d)| *d <= max_dist)
+        .min_by_key(|(_, d)| *d);
     best.map(|(start, dist)| {
         format!(
             "did you mean lines {}-{} ({} char{})?",
@@ -234,8 +233,8 @@ where
         spans.push((start, start + edit.old.len(), edit.new));
     }
     spans.sort_by_key(|(start, _, _)| *start);
-    for pair in spans.windows(2) {
-        if pair[0].1 > pair[1].0 {
+    for (prev, next) in spans.iter().tuple_windows() {
+        if prev.1 > next.0 {
             return Err(E::overlapping_edits(display.to_string()));
         }
     }
