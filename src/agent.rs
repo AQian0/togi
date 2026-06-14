@@ -83,12 +83,9 @@ type ChatFn = dyn Fn(String, Arc<[Message]>, AgentEventSender, watch::Receiver<b
     + Send
     + Sync;
 
-fn cancel_return(
-    tx: &AgentEventSender,
-    history: &Arc<[Message]>,
-) -> Result<Vec<Message>, AgentError> {
+fn cancel_return(tx: &AgentEventSender, history: &Arc<[Message]>) -> Vec<Message> {
     let _ = tx.send(AgentEvent::Notice("Esc 已中断当前回答。".to_string()));
-    Ok(history.to_vec())
+    history.to_vec()
 }
 
 fn ensure_section(current: &mut AgentSection, target: AgentSection, tx: &AgentEventSender) {
@@ -112,20 +109,20 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
         .multi_turn(max_multi_turn as usize);
     let mut stream = tokio::select! {
         biased;
-        _ = cancel_rx.changed() => return cancel_return(&tx, history),
+        _ = cancel_rx.changed() => return Ok(cancel_return(&tx, history)),
         stream = stream_request => stream,
     };
     loop {
         let item = tokio::select! {
             biased;
-            _ = cancel_rx.changed() => return cancel_return(&tx, history),
+            _ = cancel_rx.changed() => return Ok(cancel_return(&tx, history)),
             item = stream.next() => item,
         };
         match item {
             Some(Ok(MultiTurnStreamItem::StreamAssistantItem(content))) => match content {
                 StreamedAssistantContent::Reasoning(reasoning) => {
                     ensure_section(&mut section, AgentSection::Reasoning, &tx);
-                    let _ = tx.send(AgentEvent::Text(reasoning.display_text().to_string()));
+                    let _ = tx.send(AgentEvent::Text(reasoning.display_text().clone()));
                 }
                 StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
                     ensure_section(&mut section, AgentSection::Reasoning, &tx);

@@ -4,6 +4,7 @@ use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use schemars::JsonSchema;
 use serde_json::{Map, Value};
+use std::fmt::Write;
 pub const OFFSET_PARAM: &str = "offset";
 pub const LIMIT_PARAM: &str = "limit";
 
@@ -100,22 +101,24 @@ fn paginate_text(
     }
     let selected = &lines[start_idx..end_idx];
     let mut out = String::with_capacity(text.len() + 96);
-    out.push_str(&format!(
+    let _ = write!(
+        out,
         "(showing lines {}-{} of {})\n",
         start_idx + 1,
         end_idx,
         total
-    ));
+    );
     for line in selected {
         out.push_str(line);
         out.push('\n');
     }
     if end_idx < total {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "… ({} more lines; call again with offset {})\n",
             total - end_idx,
             end_idx + 1
-        ));
+        );
     }
     out
 }

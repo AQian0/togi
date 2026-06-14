@@ -21,6 +21,7 @@ pub enum ToolEffect {
 /// 既可靠（同一调用恒定分类）又可单测，对 `shell` 这类按命令而定的工具，
 /// 也由工具自身检视参数得出，而非交给模型判断。
 pub trait ClassifyEffect {
+    #[must_use]
     fn effect(_args: &Value) -> ToolEffect {
         ToolEffect::Mutating
     }
@@ -29,6 +30,7 @@ pub trait ClassifyEffect {
 /// 按工具名把副作用判定分派回对应工具。
 ///
 /// 事件转发层只拿得到工具名与参数，借此把判定委托给各工具自身的 [`ClassifyEffect`]。
+#[must_use]
 pub fn classify_call(name: &str, args: &Value) -> ToolEffect {
     match name {
         n if n == read::Read::NAME => read::Read::effect(args),

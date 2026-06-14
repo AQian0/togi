@@ -42,12 +42,13 @@ pub(super) fn render_separated(
     }
 
     if truncated {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "(output truncated at {} of {}; use shell redirects or `head`/`tail` to \
              inspect full output)",
             format_size(stored_output_len as u64),
             format_size(total_output_len as u64),
-        ));
+        );
     }
 
     out.truncate(out.trim_end_matches('\n').len());
@@ -100,12 +101,13 @@ pub(super) fn render_interleaved(
     }
 
     if truncated {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n(output truncated at {} of {}; use shell redirects or `head`/`tail` to \
              inspect full output)",
             format_size(stored_bytes as u64),
             format_size(total_bytes as u64),
-        ));
+        );
     }
 
     out.truncate(out.trim_end_matches('\n').len());
