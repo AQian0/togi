@@ -1,6 +1,6 @@
 use crate::constants;
 use crate::ui::markdown;
-use crate::ui::output::{OutputItem, SectionKind};
+use crate::ui::{OutputItem, SectionKind};
 use crate::ui::style;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -401,7 +401,7 @@ fn block_error() -> BlockStyle {
 #[cfg(test)]
 mod tests {
     use crate::error::ErrorKind;
-    use crate::ui::output::{ErrorInfo, OutputItem};
+    use crate::ui::{ErrorInfo, OutputItem};
     use crate::ui::style;
 
     fn has_block_bg(conv: &super::Conversation, want: Option<ratatui::style::Color>) -> bool {

@@ -8,7 +8,7 @@ use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
 use crate::ui::interaction::{OutputItem, SectionKind, Session};
-use crate::ui::output::ErrorInfo;
+use crate::ui::ErrorInfo;
 use crate::ui::theme::CatppuccinFlavor;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;

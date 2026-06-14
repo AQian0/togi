@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-pub use crate::ui::output::{OutputItem, SectionKind};
+pub use crate::ui::{OutputItem, SectionKind};
 
 struct TerminalModeGuard {
     active: bool,

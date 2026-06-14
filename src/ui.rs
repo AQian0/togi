@@ -34,12 +34,46 @@ impl TogiError for UiError {
     }
 }
 
+pub enum OutputItem {
+    Section(SectionKind),
+    Chunk(String),
+    ToolCall { name: String, summary: String },
+    ToolResult(String),
+    Notice(String),
+    Error(ErrorInfo),
+    Done,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum SectionKind {
+    Reasoning,
+    Answer,
+}
+
+#[derive(Clone)]
+pub struct ErrorInfo {
+    pub code: &'static str,
+    pub kind: ErrorKind,
+    pub retryable: bool,
+    pub message: String,
+}
+
+impl ErrorInfo {
+    pub fn from_error(error: &impl TogiError) -> Self {
+        Self {
+            code: error.code(),
+            kind: error.kind(),
+            retryable: error.retryable(),
+            message: error.to_string(),
+        }
+    }
+}
+
 pub(crate) mod conversation;
 pub(crate) mod editor;
 pub(crate) mod history;
 pub(crate) mod interaction;
 pub(crate) mod markdown;
-pub(crate) mod output;
 pub(crate) mod render;
 pub(crate) mod style;
 pub(crate) mod summarize;
