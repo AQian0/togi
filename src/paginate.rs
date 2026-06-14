@@ -75,8 +75,8 @@ fn paginate_text(
     limit: Option<usize>,
     default_limit: usize,
 ) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let total = lines.len();
+    // 先计数总行数（惰性迭代，不分配），再按需提取分页区间。
+    let total = text.lines().count();
     if total == 0 {
         return text.to_string();
     }
@@ -99,23 +99,27 @@ fn paginate_text(
     if !paginated {
         return text.to_string();
     }
-    let selected = &lines[start_idx..end_idx];
-    let mut out = String::with_capacity(text.len() + 96);
-    let _ = write!(
+    let selected: Vec<&str> = text
+        .lines()
+        .skip(start_idx)
+        .take(end_idx - start_idx)
+        .collect();
+    let mut out = String::with_capacity(text.len().min(16_384) + 96);
+    let _ = writeln!(
         out,
-        "(showing lines {}-{} of {})\n",
+        "(showing lines {}-{} of {})",
         start_idx + 1,
         end_idx,
         total
     );
-    for line in selected {
+    for line in &selected {
         out.push_str(line);
         out.push('\n');
     }
     if end_idx < total {
-        let _ = write!(
+        let _ = writeln!(
             out,
-            "… ({} more lines; call again with offset {})\n",
+            "… ({} more lines; call again with offset {})",
             total - end_idx,
             end_idx + 1
         );

@@ -102,14 +102,11 @@ fn log_enabled() -> bool {
 }
 
 fn candidate_paths() -> impl Iterator<Item = std::path::PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        paths.push(cwd.join(constants::CONFIG_FILENAME));
-    }
-    if let Some(p) = default_config_path() {
-        paths.push(p);
-    }
-    paths.into_iter()
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join(constants::CONFIG_FILENAME));
+    let default = default_config_path();
+    cwd.into_iter().chain(default)
 }
 
 fn default_config_path() -> Option<std::path::PathBuf> {

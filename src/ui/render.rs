@@ -320,7 +320,7 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
         let total = display_lines.len();
         let visible = conv_area.height as usize;
         if total <= visible {
-            let mut final_lines: Vec<Line> = display_lines.iter().cloned().collect();
+            let mut final_lines: Vec<Line> = display_lines.to_vec();
             if submitting {
                 final_lines.push(Line::from(""));
                 final_lines.push(Line::from(Span::styled(" …", dim_style)));
