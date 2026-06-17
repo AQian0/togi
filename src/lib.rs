@@ -2,6 +2,7 @@ pub mod agent;
 pub mod app;
 pub mod config;
 pub mod error;
+pub(crate) mod transform;
 pub mod ui;
 
 pub use common::FileTooLargeError;

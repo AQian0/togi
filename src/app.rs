@@ -1,4 +1,4 @@
-use crate::agent::{AgentEvent, AgentSection, DynamicAgent};
+use crate::agent::DynamicAgent;
 use crate::command::Args;
 use crate::constants;
 use crate::inject::{CWD_PARAM, Injection, inject};
@@ -7,7 +7,7 @@ use crate::tools::{ToolEffect, ToolRegistry};
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
-use crate::ui::interaction::{OutputItem, SectionKind, Session};
+use crate::ui::interaction::{OutputItem, Session};
 use crate::ui::ErrorInfo;
 use crate::ui::theme::CatppuccinFlavor;
 use rig::message::Message;
@@ -76,7 +76,7 @@ impl AppController {
             // 的副作用类别。
             let mut pending_effect: Option<ToolEffect> = None;
             while let Some(event) = agent_rx.recv().await {
-                let _ = ui_tx.send(output_from_agent_event(event, &mut pending_effect, &registry));
+                let _ = ui_tx.send(crate::transform::to_output(event, &mut pending_effect, &registry));
             }
         });
 
@@ -101,35 +101,6 @@ impl AppController {
                 let _ = tx.send(OutputItem::Done);
             }
         }
-    }
-}
-
-fn output_from_agent_event(
-    event: AgentEvent,
-    pending_effect: &mut Option<ToolEffect>,
-    registry: &ToolRegistry,
-) -> OutputItem {
-    match event {
-        AgentEvent::Section(section) => OutputItem::Section(match section {
-            AgentSection::Reasoning => SectionKind::Reasoning,
-            AgentSection::Answer => SectionKind::Answer,
-        }),
-        AgentEvent::Text(text) => OutputItem::Chunk(text),
-        AgentEvent::ToolCall { name, arguments } => {
-            let summary = crate::ui::summarize::summarize_call(&name, &arguments);
-            *pending_effect = Some(registry.classify(&name, &arguments));
-            OutputItem::ToolCall { name, summary }
-        }
-        AgentEvent::ToolResult(text) => {
-            match pending_effect.take().unwrap_or(ToolEffect::Mutating) {
-                // 只读 / 查询：仅展示行为与简短摘要，不在对话区铺开具体内容。
-                ToolEffect::ReadOnly => {
-                    OutputItem::ToolResult(crate::ui::summarize::summarize_readonly_result(&text))
-                }
-                ToolEffect::Mutating => OutputItem::ToolResult(text),
-            }
-        }
-        AgentEvent::Notice(text) => OutputItem::Notice(text),
     }
 }
 
