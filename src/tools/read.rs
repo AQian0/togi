@@ -8,6 +8,7 @@ use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 mod binary;
 mod io;
@@ -151,7 +152,15 @@ impl Tool for Read {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = Self::resolve(args.cwd.as_deref(), &args.path)?;
         let display = path.display().to_string();
-        let metadata = tokio::fs::metadata(&path)
+
+        // Open the file once and use the same handle for metadata, binary
+        // detection, and content reading — avoids TOCTOU between size/dir
+        // checks and the actual read.
+        let mut file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|source| Self::map_io(source, display.clone()))?;
+        let metadata = file
+            .metadata()
             .await
             .map_err(|source| Self::map_io(source, display.clone()))?;
         if metadata.is_dir() {
@@ -166,7 +175,7 @@ impl Tool for Read {
         let remaining_bytes = file_size.saturating_sub(offset_bytes);
         let encoding = args.encoding.as_deref().unwrap_or("hex");
 
-        let head = io::read_head(&path, file_size)
+        let head = io::read_head_from_file(&mut file, file_size)
             .await
             .map_err(|source| Self::map_io(source, display.clone()))?;
         let binary = is_binary(&head);
@@ -193,7 +202,13 @@ impl Tool for Read {
             return text::read_streaming(&path, &display, file_size, offset_bytes, limit).await;
         }
 
-        let buf = tokio::fs::read(&path)
+        // Small text file: cursor is past the detection head; seek back to
+        // start and read the rest from the same handle.
+        file.seek(std::io::SeekFrom::Start(0))
+            .await
+            .map_err(|source| Self::map_io(source, display.clone()))?;
+        let mut buf = Vec::with_capacity(file_size as usize);
+        file.read_to_end(&mut buf)
             .await
             .map_err(|source| Self::map_io(source, display.clone()))?;
 

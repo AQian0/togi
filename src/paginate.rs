@@ -57,6 +57,11 @@ impl ToolDyn for PaginatedTool {
         Box::pin(async move {
             let mut args = parse_args_object(&args)?;
             let offset = take_usize(&mut args, OFFSET_PARAM)?;
+            if offset == Some(0) {
+                return Err(ToolError::ToolCallError(
+                    "`offset` is 1-based and must be at least 1.".into(),
+                ));
+            }
             let limit = take_usize(&mut args, LIMIT_PARAM)?;
             let inner_args = serde_json::to_string(&args).map_err(ToolError::JsonError)?;
             let output = self.inner.call(inner_args).await?;
@@ -81,6 +86,8 @@ fn paginate_text(
     if total == 0 {
         return text.to_string();
     }
+    // offset is validated as >=1 at the tool-call boundary; keep max(1) as
+    // defense-in-depth in case this helper is ever called from another path.
     let start = offset.unwrap_or(1).max(1);
     if start > total {
         return format!("(offset {start} is past end of output; output has {total} lines)");
@@ -227,7 +234,10 @@ mod tests {
         assert_eq!(out, "a\nb\nc\nd\ne\n");
     }
     #[test]
-    fn offset_of_zero_is_treated_as_first_line() {
+    fn offset_of_zero_is_clamped_to_one_at_helper_level() {
+        // paginate_text still clamps offset 0 → 1 as defense-in-depth.
+        // The tool-call boundary rejects offset=0 before reaching here
+        // (see offset_zero_rejected_at_tool_level below).
         let out = paginate_text("a\nb\n", Some(0), Some(1), 0);
         assert!(out.contains("a\n"));
         assert!(!out.contains("\nb\n"));
@@ -339,5 +349,19 @@ mod tests {
             vec![Box::new(RawEcho) as Box<dyn ToolDyn>, Box::new(FixedLines)],
         );
         assert_eq!(tools.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn offset_zero_rejected_at_tool_level() {
+        let tool = paginate(0, RawEcho);
+        let result = tool
+            .call(r#"{"text":"hi","offset":0}"#.to_string())
+            .await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("1-based") || err_msg.contains("at least 1"),
+            "expected error about offset being 1-based, got: {err_msg}"
+        );
     }
 }

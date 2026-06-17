@@ -141,8 +141,9 @@ pub enum ShellError {
          path, then retry."
     )]
     BadWorkingDir { path: String },
-    #[error("failed to start the command: {source}")]
+    #[error("failed to start the command in `{cwd}`: {source}")]
     Spawn {
+        cwd: String,
         #[source]
         source: std::io::Error,
     },

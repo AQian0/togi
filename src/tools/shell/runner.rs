@@ -14,7 +14,10 @@ pub(super) async fn run_separated(
 ) -> Result<String, ShellError> {
     let mut child = process::shell_command(command, cwd, env)
         .spawn()
-        .map_err(|source| ShellError::Spawn { source })?;
+        .map_err(|source| ShellError::Spawn {
+            cwd: cwd.display().to_string(),
+            source,
+        })?;
     let child_id = child.id();
     let stdout = child.stdout.take().ok_or_else(|| ShellError::Io {
         source: std::io::Error::other("failed to capture stdout"),
@@ -64,7 +67,10 @@ pub(super) async fn run_interleaved(
 ) -> Result<String, ShellError> {
     let mut child = process::shell_command(command, cwd, env)
         .spawn()
-        .map_err(|source| ShellError::Spawn { source })?;
+        .map_err(|source| ShellError::Spawn {
+            cwd: cwd.display().to_string(),
+            source,
+        })?;
     let child_id = child.id();
 
     let stdout_handle = child.stdout.take().ok_or_else(|| ShellError::Io {
