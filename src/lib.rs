@@ -12,4 +12,5 @@ pub(crate) mod common;
 pub(crate) mod constants;
 pub mod inject;
 pub(crate) mod paginate;
+pub(crate) mod tool_pipeline;
 pub mod tools;

@@ -1,4 +1,5 @@
 use crate::common::parse_args_object;
+use crate::tool_pipeline::ApplyLayer;
 use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
@@ -23,32 +24,10 @@ impl Injection {
 }
 pub fn inject<T, Shape>(injection: impl Into<Injection>, tools: T) -> T::Output
 where
-    T: InjectTools<Shape>,
+    T: ApplyLayer<Shape>,
 {
-    tools.inject(injection.into().into_params())
-}
-pub struct Single;
-pub struct Multiple;
-pub trait InjectTools<Shape> {
-    type Output;
-    fn inject(self, params: Map<String, Value>) -> Self::Output;
-}
-impl<T> InjectTools<Single> for T
-where
-    T: ToolDyn + 'static,
-{
-    type Output = Box<dyn ToolDyn>;
-    fn inject(self, params: Map<String, Value>) -> Self::Output {
-        wrap(Box::new(self), params)
-    }
-}
-impl InjectTools<Multiple> for Vec<Box<dyn ToolDyn>> {
-    type Output = Vec<Box<dyn ToolDyn>>;
-    fn inject(self, params: Map<String, Value>) -> Self::Output {
-        self.into_iter()
-            .map(|tool| wrap(tool, params.clone()))
-            .collect()
-    }
+    let params = injection.into().into_params();
+    tools.apply(move |tool| wrap(tool, params.clone()))
 }
 struct InjectedTool {
     inner: Box<dyn ToolDyn>,

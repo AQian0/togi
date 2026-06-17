@@ -1,4 +1,5 @@
 use crate::common::parse_args_object;
+use crate::tool_pipeline::ApplyLayer;
 use itertools::Itertools;
 use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
@@ -11,32 +12,9 @@ pub const LIMIT_PARAM: &str = "limit";
 
 pub fn paginate<T, Shape>(default_limit: usize, tools: T) -> T::Output
 where
-    T: PaginateTools<Shape>,
+    T: ApplyLayer<Shape>,
 {
-    tools.inject(default_limit)
-}
-pub struct Single;
-pub struct Multiple;
-pub trait PaginateTools<Shape> {
-    type Output;
-    fn inject(self, default_limit: usize) -> Self::Output;
-}
-impl<T> PaginateTools<Single> for T
-where
-    T: ToolDyn + 'static,
-{
-    type Output = Box<dyn ToolDyn>;
-    fn inject(self, default_limit: usize) -> Self::Output {
-        wrap(Box::new(self), default_limit)
-    }
-}
-impl PaginateTools<Multiple> for Vec<Box<dyn ToolDyn>> {
-    type Output = Vec<Box<dyn ToolDyn>>;
-    fn inject(self, default_limit: usize) -> Self::Output {
-        self.into_iter()
-            .map(|tool| wrap(tool, default_limit))
-            .collect()
-    }
+    tools.apply(move |tool| wrap(tool, default_limit))
 }
 struct PaginatedTool {
     inner: Box<dyn ToolDyn>,
