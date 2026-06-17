@@ -3,7 +3,7 @@ use crate::command::Args;
 use crate::constants;
 use crate::inject::{CWD_PARAM, Injection, inject};
 use crate::paginate::paginate;
-use crate::tools::ToolEffect;
+use crate::tools::{ToolEffect, ToolRegistry};
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
@@ -25,6 +25,7 @@ type UiSender = mpsc::UnboundedSender<OutputItem>;
 struct AppController {
     agent: Arc<DynamicAgent>,
     history: History,
+    registry: Arc<ToolRegistry>,
     cancel_tx: watch::Sender<bool>,
     task_cancel: CancellationToken,
 }
@@ -33,12 +34,14 @@ impl AppController {
     fn new(
         agent: Arc<DynamicAgent>,
         history: History,
+        registry: Arc<ToolRegistry>,
         cancel_tx: watch::Sender<bool>,
         task_cancel: CancellationToken,
     ) -> Self {
         Self {
             agent,
             history,
+            registry,
             cancel_tx,
             task_cancel,
         }
@@ -65,6 +68,7 @@ impl AppController {
         let cancel_rx = self.cancel_tx.subscribe();
         let (agent_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
         let ui_tx = tx.clone();
+        let registry = Arc::clone(&self.registry);
         let forward_task = tokio::spawn(async move {
             // 工具调用与结果在流中严格 1:1 交替出现（rig-core streaming.rs
             // 在每个 tool_call 之后立即执行并 yield 对应的 tool_result，
@@ -72,7 +76,7 @@ impl AppController {
             // 的副作用类别。
             let mut pending_effect: Option<ToolEffect> = None;
             while let Some(event) = agent_rx.recv().await {
-                let _ = ui_tx.send(output_from_agent_event(event, &mut pending_effect));
+                let _ = ui_tx.send(output_from_agent_event(event, &mut pending_effect, &registry));
             }
         });
 
@@ -103,6 +107,7 @@ impl AppController {
 fn output_from_agent_event(
     event: AgentEvent,
     pending_effect: &mut Option<ToolEffect>,
+    registry: &ToolRegistry,
 ) -> OutputItem {
     match event {
         AgentEvent::Section(section) => OutputItem::Section(match section {
@@ -112,7 +117,7 @@ fn output_from_agent_event(
         AgentEvent::Text(text) => OutputItem::Chunk(text),
         AgentEvent::ToolCall { name, arguments } => {
             let summary = crate::ui::summarize::summarize_call(&name, &arguments);
-            *pending_effect = Some(crate::tools::classify_call(&name, &arguments));
+            *pending_effect = Some(registry.classify(&name, &arguments));
             OutputItem::ToolCall { name, summary }
         }
         AgentEvent::ToolResult(text) => {
@@ -150,9 +155,18 @@ async fn preload_highlighting() {
     .await;
 }
 
-fn build_tools(cwd: &Path) -> Vec<Box<dyn ToolDyn>> {
+fn build_tools(cwd: &Path) -> (Vec<Box<dyn ToolDyn>>, ToolRegistry) {
+    let mut registry = ToolRegistry::new();
+
+    // 在工具被 inject / paginate 包装之前注册其副作用分类器。
+    // 包装后的 trait object 无法访问静态分类函数，因此必须
+    // 在此处捕获函数指针。
+    registry.register::<Read>();
+    registry.register::<Modify>();
+    registry.register::<Shell>();
+
     let injected = Injection::new().value(CWD_PARAM, cwd.display().to_string());
-    paginate(
+    let tools = paginate(
         constants::DEFAULT_PAGE_LINES,
         inject(
             injected,
@@ -162,7 +176,9 @@ fn build_tools(cwd: &Path) -> Vec<Box<dyn ToolDyn>> {
                 Box::new(Shell),
             ],
         ),
-    )
+    );
+
+    (tools, registry)
 }
 
 fn build_agent(
@@ -201,7 +217,8 @@ pub async fn run() -> crate::error::Result<()> {
     preload_highlighting().await;
 
     let cwd = std::env::current_dir()?;
-    let agent = Arc::new(build_agent(&args, &config, build_tools(&cwd))?);
+    let (tools, registry) = build_tools(&cwd);
+    let agent = Arc::new(build_agent(&args, &config, tools)?);
     let history = Arc::new(RwLock::new(Arc::from(Vec::new())));
     let mut session = Session::new()?;
 
@@ -209,6 +226,7 @@ pub async fn run() -> crate::error::Result<()> {
     let controller = AppController::new(
         agent,
         history,
+        Arc::new(registry),
         session.cancel_sender(),
         global_cancel.clone(),
     );

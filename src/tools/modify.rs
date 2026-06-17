@@ -197,7 +197,11 @@ impl TogiError for ModifyError {
 pub struct Modify;
 
 // Modify 始终有副作用（写入 / 编辑），沿用默认的 `Mutating`。
-impl crate::tools::ClassifyEffect for Modify {}
+impl crate::tools::ClassifyEffect for Modify {
+    fn name() -> &'static str {
+        Self::NAME
+    }
+}
 
 impl Modify {
     fn resolve(cwd: Option<&Path>, raw_path: &str) -> Result<PathBuf, ModifyError> {

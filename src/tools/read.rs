@@ -18,7 +18,10 @@ mod text;
 pub struct Read;
 
 impl crate::tools::ClassifyEffect for Read {
-    fn effect(_args: &serde_json::Value) -> crate::tools::ToolEffect {
+    fn name() -> &'static str {
+        Self::NAME
+    }
+    fn classify(_args: &serde_json::Value) -> crate::tools::ToolEffect {
         // 读取文件永远是只读操作。
         crate::tools::ToolEffect::ReadOnly
     }

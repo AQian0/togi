@@ -17,7 +17,10 @@ mod runner;
 pub struct Shell;
 
 impl crate::tools::ClassifyEffect for Shell {
-    fn effect(args: &serde_json::Value) -> crate::tools::ToolEffect {
+    fn name() -> &'static str {
+        Self::NAME
+    }
+    fn classify(args: &serde_json::Value) -> crate::tools::ToolEffect {
         let is_query = args
             .get("command")
             .and_then(serde_json::Value::as_str)
