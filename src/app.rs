@@ -187,7 +187,10 @@ pub async fn run() -> crate::error::Result<()> {
     apply_theme(&args, &config)?;
     preload_highlighting().await;
 
-    let cwd = std::env::current_dir()?;
+    let cwd = std::env::current_dir().map_err(|source| crate::error::AppError::Io {
+        context: "get current working directory",
+        source,
+    })?;
     let (tools, registry) = build_tools(&cwd);
     let agent = Arc::new(build_agent(&args, &config, tools)?);
     let history = Arc::new(RwLock::new(Arc::from(Vec::new())));
@@ -213,10 +216,16 @@ pub async fn run() -> crate::error::Result<()> {
             )
             .await;
         if let Err(e) = result {
-            eprintln!("{}", crate::t!("app-session-error", error = e.to_string()));
+            eprintln!(
+                "{}",
+                crate::t!("app-session-error", error = crate::error::TogiError::user_message(&e))
+            );
         }
         if let Err(e) = session.save_history() {
-            eprintln!("{}", crate::t!("app-history-save-error", error = e.to_string()));
+            eprintln!(
+                "{}",
+                crate::t!("app-history-save-error", error = crate::error::TogiError::user_message(&e))
+            );
         }
     });
 

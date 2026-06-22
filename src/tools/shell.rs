@@ -184,6 +184,24 @@ impl TogiError for ShellError {
             Self::Timeout { .. } => ErrorKind::Timeout,
         }
     }
+
+    fn user_message(&self) -> String {
+        match self {
+            Self::BadWorkingDir { path } => {
+                crate::t!("error-bad-working-dir", path = path.clone())
+            }
+            Self::Timeout { secs } => {
+                crate::t!("error-shell-timeout", secs = *secs)
+            }
+            Self::Spawn { cwd, source } => {
+                crate::t!("error-shell-spawn", cwd = cwd.clone(), error = source.to_string())
+            }
+            Self::Io { source } => {
+                crate::t!("error-shell-io", error = source.to_string())
+            }
+            _ => self.to_string(),
+        }
+    }
 }
 
 impl Tool for Shell {

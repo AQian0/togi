@@ -132,6 +132,17 @@ impl TogiError for ReadError {
             Self::PermissionDenied { path } => {
                 crate::t!("error-permission-denied", path = path.clone())
             }
+            Self::FileTooLarge(err) => crate::t!(
+                "error-file-too-large",
+                path = err.path.clone(),
+                size = crate::common::format_size(err.size),
+                max = crate::common::format_size(err.max)
+            ),
+            Self::Io { path, source } => crate::t!(
+                "error-read-io",
+                path = path.clone(),
+                error = source.to_string()
+            ),
             _ => self.to_string(),
         }
     }

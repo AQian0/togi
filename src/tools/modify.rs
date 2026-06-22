@@ -175,12 +175,12 @@ impl TogiError for ModifyError {
         match self {
             Self::EmptyPath
             | Self::NoInstructions
+            | Self::ConflictingInstructions
+            | Self::ConflictingBase64
             | Self::InvalidBase64 { .. }
             | Self::EmptyOldText => ErrorKind::InvalidArgument,
             Self::MissingCwd => ErrorKind::MissingRuntimeInjection,
-            Self::ConflictingInstructions
-            | Self::ConflictingBase64
-            | Self::OldTextNotFound { .. }
+            Self::OldTextNotFound { .. }
             | Self::OldTextNotUnique { .. }
             | Self::OverlappingEdits { .. } => ErrorKind::Conflict,
             Self::FileTooLarge(_) => ErrorKind::TooLarge,
@@ -200,6 +200,26 @@ impl TogiError for ModifyError {
                 crate::t!("error-permission-denied", path = path.clone())
             }
             Self::NotUtf8 { path } => crate::t!("error-not-utf8", path = path.clone()),
+            Self::OldTextNotFound { path, .. } => {
+                crate::t!("error-old-text-not-found", path = path.clone())
+            }
+            Self::OldTextNotUnique { path, .. } => {
+                crate::t!("error-old-text-not-unique", path = path.clone())
+            }
+            Self::OverlappingEdits { path } => {
+                crate::t!("error-overlapping-edits", path = path.clone())
+            }
+            Self::FileTooLarge(err) => crate::t!(
+                "error-file-too-large",
+                path = err.path.clone(),
+                size = crate::common::format_size(err.size),
+                max = crate::common::format_size(err.max)
+            ),
+            Self::Io { path, source } => crate::t!(
+                "error-modify-io",
+                path = path.clone(),
+                error = source.to_string()
+            ),
             _ => self.to_string(),
         }
     }

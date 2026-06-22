@@ -5,13 +5,13 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("无法读取配置文件 {path}：{source}")]
+    #[error("failed to read config file {path}: {source}")]
     Read {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("配置文件 {path} 解析失败：{source}")]
+    #[error("failed to parse config file {path}: {source}")]
     Parse {
         path: PathBuf,
         #[source]
@@ -35,8 +35,18 @@ impl TogiError for ConfigError {
     }
 
     fn user_message(&self) -> String {
-        // ConfigError 的 Display 已经是面向用户的中文/英文，无需额外翻译。
-        self.to_string()
+        match self {
+            Self::Read { path, source } => crate::t!(
+                "config-read-error",
+                path = path.display().to_string(),
+                error = source.to_string()
+            ),
+            Self::Parse { path, source } => crate::t!(
+                "config-parse-error",
+                path = path.display().to_string(),
+                error = source.to_string()
+            ),
+        }
     }
 }
 
@@ -175,8 +185,9 @@ mod tests {
         std::fs::write(&path, "this is not valid toml [[[").unwrap();
 
         let result = Config::load_from(vec![path.clone()]);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("解析失败"));
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "config.parse");
+        assert_eq!(err.kind(), ErrorKind::InvalidArgument);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);

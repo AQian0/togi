@@ -52,6 +52,20 @@ error-permission-denied = Permission denied: `{ $path }`.
 error-not-a-file = `{ $path }` is a directory, not a file. Provide a file path.
 error-not-utf8 = `{ $path }` is not valid UTF-8 text and cannot be edited as a string.
 error-default-model-init = Could not initialize the default model (deepseek-v4-pro): { $source }. Set the DEEPSEEK_API_KEY environment variable, or specify a different model in togi.toml via system.model.
+error-unsupported-theme = Unsupported theme `{ $input }`, available themes: Latte, Frappe, Macchiato, Mocha.
+error-bad-working-dir = The working directory `{ $path }` does not exist or is not a directory. Double-check the path, then retry.
+error-shell-timeout = The command did not finish within { $secs } seconds and was killed. Increase `timeout_secs` or run a faster command.
+error-shell-spawn = Failed to start the command in `{ $cwd }`: { $error }
+error-shell-io = IO error while running the command: { $error }
+error-old-text-not-found = Could not find the text to replace in `{ $path }`. Make sure `old_text` matches the file content exactly.
+error-old-text-not-unique = Found multiple matches for `old_text` in `{ $path }`. Provide a longer context to make it unique.
+error-overlapping-edits = Two or more edits target overlapping text in `{ $path }`. Make each `old_text` cover a distinct region.
+error-file-too-large = `{ $path }` is { $size }, which exceeds the maximum allowed size of { $max }. Use the `shell` tool with `head`, `tail`, or `sed` to work with this file instead.
+error-read-io = IO error while reading `{ $path }`: { $error }
+error-modify-io = IO error while modifying `{ $path }`: { $error }
+app-io-error = IO error during { $context }: { $error }
+config-read-error = Could not read config file { $path }: { $error }
+config-parse-error = Failed to parse config file { $path }: { $error }
 
 # ── Conversation ─────────────────────────────────────────────────────
 conv-user-label = You

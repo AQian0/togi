@@ -13,31 +13,29 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::watch;
 
-type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
-
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    #[error("无法识别模型 \"{model}\" 对应的提供商。\n支持的提供商：{supported}")]
+    #[error("could not identify the provider for model \"{model}\". Supported providers: {supported}")]
     UnknownProvider { model: String, supported: String },
 
-    #[error("未设置 {env} 环境变量：{source}")]
+    #[error("{env} environment variable not set: {source}")]
     MissingApiKey {
         env: &'static str,
         #[source]
-        source: DynError,
+        source: rig::client::ProviderClientError,
     },
 
-    #[error("无法初始化 {provider} 提供商：{source}")]
+    #[error("could not initialize {provider} provider: {source}")]
     ProviderInit {
         provider: &'static str,
         #[source]
-        source: DynError,
+        source: rig::client::ProviderClientError,
     },
 
-    #[error("模型流式响应失败：{source}")]
+    #[error("model streaming failed: {source}")]
     Stream {
         #[source]
-        source: DynError,
+        source: rig::agent::StreamingError,
     },
 }
 
@@ -54,8 +52,9 @@ impl TogiError for AgentError {
     fn kind(&self) -> ErrorKind {
         match self {
             Self::UnknownProvider { .. } => ErrorKind::InvalidArgument,
-            Self::MissingApiKey { .. } => ErrorKind::MissingRuntimeInjection,
-            Self::ProviderInit { .. } | Self::Stream { .. } => ErrorKind::External,
+            Self::MissingApiKey { .. }
+            | Self::ProviderInit { .. }
+            | Self::Stream { .. } => ErrorKind::External,
         }
     }
 
@@ -179,9 +178,7 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
             }
             Some(Ok(_)) => {}
             Some(Err(err)) => {
-                return Err(AgentError::Stream {
-                    source: Box::new(err),
-                });
+                return Err(AgentError::Stream { source: err });
             }
             None => break,
         }
@@ -241,7 +238,7 @@ macro_rules! providers {
                     stringify!($variant),
                 ));
             )*
-            parts.join("，")
+            parts.join(", ")
         }
         impl DynamicAgent {
             pub fn build(
@@ -263,12 +260,12 @@ macro_rules! providers {
                             let client = if let Some(key) = api_key {
                                 <$client>::new(key).map_err(|source| AgentError::ProviderInit {
                                     provider: stringify!($variant),
-                                    source: Box::new(source),
+                                    source: source.into(),
                                 })?
                             } else {
                                 <$client>::from_env().map_err(|source| AgentError::MissingApiKey {
                                     env: $env,
-                                    source: Box::new(source),
+                                    source,
                                 })?
                             };
                             let inner = Arc::new(
@@ -428,11 +425,17 @@ mod tests {
 
     #[test]
     fn build_unknown_model_returns_error() {
+        use crate::error::TogiError;
         let result = DynamicAgent::build("unknown-model", "", vec![], None, 3);
-        assert!(result.is_err());
-        let err_msg = format!("{}", result.err().unwrap());
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected error for unknown model"),
+        };
+        assert_eq!(err.code(), "agent.unknown_provider");
+        assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+        let err_msg = err.to_string();
         assert!(
-            err_msg.contains("无法识别模型"),
+            err_msg.contains("unknown-model"),
             "unexpected error: {err_msg}"
         );
     }

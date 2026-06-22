@@ -209,6 +209,14 @@ impl TogiError for ThemeError {
             Self::UnsupportedFlavor { .. } => ErrorKind::InvalidArgument,
         }
     }
+
+    fn user_message(&self) -> String {
+        match self {
+            Self::UnsupportedFlavor { input } => {
+                crate::t!("error-unsupported-theme", input = input.clone())
+            }
+        }
+    }
 }
 
 impl FromStr for CatppuccinFlavor {

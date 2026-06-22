@@ -12,10 +12,10 @@ use crate::error::{ErrorKind, TogiError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum UiError {
-    #[error("终端 UI 错误：{0}")]
+    #[error("terminal UI error: {0}")]
     Terminal(#[from] std::io::Error),
 
-    #[error("无法保存输入历史：{source}")]
+    #[error("failed to save input history: {source}")]
     HistorySave {
         #[source]
         source: std::io::Error,

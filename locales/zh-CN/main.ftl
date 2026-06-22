@@ -52,6 +52,20 @@ error-permission-denied = 权限不足，无法访问：`{ $path }`。
 error-not-a-file = `{ $path }` 是目录，不是文件。请提供文件路径。
 error-not-utf8 = `{ $path }` 不是有效的 UTF-8 文本，无法按字符串编辑。
 error-default-model-init = 无法初始化默认模型 (deepseek-v4-pro)：{ $source }。请设置 DEEPSEEK_API_KEY 环境变量，或在 togi.toml 中通过 system.model 指定其他模型。
+error-unsupported-theme = 不支持的主题 `{ $input }`，可用主题：Latte、Frappe、Macchiato、Mocha。
+error-bad-working-dir = 工作目录 `{ $path }` 不存在或不是目录。请检查路径后重试。
+error-shell-timeout = 命令在 { $secs } 秒内未完成，已被终止。请增大 `timeout_secs` 或运行更快的命令。
+error-shell-spawn = 无法在 `{ $cwd }` 中启动命令：{ $error }
+error-shell-io = 运行命令时发生 IO 错误：{ $error }
+error-old-text-not-found = 在 `{ $path }` 中未找到要替换的文本。请检查 `old_text` 是否与文件内容完全一致。
+error-old-text-not-unique = 在 `{ $path }` 中找到多处匹配 `old_text` 的文本。请提供更长的上下文使其唯一。
+error-overlapping-edits = `{ $path }` 中有两处或更多编辑区域重叠。请确保每个 `old_text` 覆盖不同的区域。
+error-file-too-large = `{ $path }` 大小为 { $size }，超过最大允许大小 { $max }。请使用 `shell` 工具的 `head`、`tail` 或 `sed` 命令查看。
+error-read-io = 读取 `{ $path }` 时发生 IO 错误：{ $error }
+error-modify-io = 修改 `{ $path }` 时发生 IO 错误：{ $error }
+app-io-error = { $context }时发生 IO 错误：{ $error }
+config-read-error = 无法读取配置文件 { $path }：{ $error }
+config-parse-error = 配置文件 { $path } 解析失败：{ $error }
 
 # ── Conversation ─────────────────────────────────────────────────────
 conv-user-label = 用户

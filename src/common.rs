@@ -93,6 +93,7 @@ pub(crate) fn resolve_tool_path(
     "`{path}` is {size} which exceeds the maximum allowed size of {max}. \
      Use the `shell` tool with commands like `head`, `tail`, `sed`, or `xxd` \
      to work with this file instead.",
+    size = crate::common::format_size(*size),
     max = crate::common::format_size(*max)
 )]
 pub struct FileTooLargeError {
@@ -108,6 +109,15 @@ impl TogiError for FileTooLargeError {
 
     fn kind(&self) -> TogiErrorKind {
         TogiErrorKind::TooLarge
+    }
+
+    fn user_message(&self) -> String {
+        crate::t!(
+            "error-file-too-large",
+            path = self.path.clone(),
+            size = crate::common::format_size(self.size),
+            max = crate::common::format_size(self.max)
+        )
     }
 }
 
