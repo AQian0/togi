@@ -4,8 +4,8 @@ use clap::Parser;
 #[command(
     name = "togi",
     version,
-    about = "终端里的 AI 编程助手",
-    long_about = "togi 是一个运行在终端里的 AI 编程助手，支持多模型切换、文件操作、Shell 命令执行等功能。"
+    about = cli_about(),
+    long_about = cli_long_about()
 )]
 pub struct Args {
     #[arg(short = 'm', long = "model", value_name = "MODEL")]
@@ -18,6 +18,14 @@ pub struct Args {
     #[arg(long = "theme", value_name = "FLAVOR")]
     pub theme: Option<String>,
 }
+fn cli_about() -> String {
+    crate::t!("cli-about")
+}
+
+fn cli_long_about() -> String {
+    crate::t!("cli-long-about")
+}
+
 impl Args {
     pub fn parse() -> Self {
         <Self as Parser>::parse()

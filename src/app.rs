@@ -83,7 +83,7 @@ impl AppController {
         let result = tokio::select! {
             _ = self.task_cancel.cancelled() => {
                 forward_task.abort();
-                let _ = tx.send(OutputItem::Notice("已取消。".to_string()));
+                let _ = tx.send(OutputItem::Notice(crate::t!("app-cancelled")));
                 let _ = tx.send(OutputItem::Done);
                 return;
             }
@@ -213,10 +213,10 @@ pub async fn run() -> crate::error::Result<()> {
             )
             .await;
         if let Err(e) = result {
-            eprintln!("Session 错误：{e}");
+            eprintln!("{}", crate::t!("app-session-error", error = e.to_string()));
         }
         if let Err(e) = session.save_history() {
-            eprintln!("无法保存输入历史：{e}");
+            eprintln!("{}", crate::t!("app-history-save-error", error = e.to_string()));
         }
     });
 

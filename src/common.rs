@@ -127,10 +127,13 @@ pub(crate) fn check_file_size(path: &str, size: u64) -> Result<(), FileTooLargeE
 #[must_use]
 pub(crate) fn truncation_notice(shown: u64, total: u64, unit: &str) -> String {
     format!(
-        "\n(showing {} of {} {unit}; use the `shell` tool with `tail`, `head`, \
-         or `sed` to inspect beyond this range)",
-        format_size(shown),
-        format_size(total),
+        "\n{}",
+        crate::t!(
+            "common-truncation-notice",
+            shown = format_size(shown),
+            total = format_size(total),
+            unit = unit
+        )
     )
 }
 
@@ -220,7 +223,7 @@ pub(crate) fn parse_args_object(args: &str) -> Result<Map<String, Value>, ToolEr
 pub(crate) fn append_diff(summary: String, diff: Option<String>, existed: bool) -> String {
     match diff {
         Some(diff) => format!("{summary}\n{diff}"),
-        None if existed => format!("{summary}\n(no changes)"),
+        None if existed => format!("{summary}\n{}", crate::t!("common-no-changes")),
         None => summary,
     }
 }
@@ -255,7 +258,8 @@ mod tests {
     #[test]
     fn append_diff_without_diff_existed() {
         let result = append_diff("summary".into(), None, true);
-        assert_eq!(result, "summary\n(no changes)");
+        let expected = format!("summary\n{}", crate::t!("common-no-changes"));
+        assert_eq!(result, expected);
     }
 
     #[test]

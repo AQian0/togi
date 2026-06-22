@@ -178,7 +178,7 @@ impl Conversation {
             bg: user_style.bg,
         };
         self.items.push(ConvItem::Line(ConvLine {
-            spans: vec![("用户".to_string(), user_style)],
+            spans: vec![(crate::t!("conv-user-label"), user_style)],
             align: Align::Right,
             block: Some(blk),
         }));
@@ -236,7 +236,7 @@ impl Conversation {
                         let blk = block_reasoning();
                         self.md_block = Some(blk);
                         self.items.push(ConvItem::Line(ConvLine::block(
-                            "思考过程",
+                            &crate::t!("conv-reasoning-label"),
                             style::thinking_block(),
                             blk,
                         )));
@@ -245,7 +245,7 @@ impl Conversation {
                         let blk = block_answer();
                         self.md_block = Some(blk);
                         self.items.push(ConvItem::Line(ConvLine::block(
-                            "回答",
+                            &crate::t!("conv-answer-label"),
                             style::assistant_block(),
                             blk,
                         )));
@@ -287,7 +287,7 @@ impl Conversation {
                 let total = lines.len();
                 if total == 0 || (total == 1 && lines[0].trim().is_empty()) {
                     self.items.push(ConvItem::Line(ConvLine::block(
-                        "(无输出)",
+                        &crate::t!("conv-empty-output"),
                         style::tool_result_block(),
                         blk,
                     )));
@@ -302,7 +302,7 @@ impl Conversation {
                     }
                     if total > shown {
                         self.items.push(ConvItem::Line(ConvLine::block(
-                            format!("… 其余 {} 行（已折叠）", total - shown),
+                            crate::t!("conv-folded-lines", count = total - shown),
                             style::tool_result_block(),
                             blk,
                         )));
@@ -327,12 +327,15 @@ impl Conversation {
             OutputItem::Error(info) => {
                 self.flush_md();
                 self.md_block = None;
-                let retry = if info.retryable { " · 可重试" } else { "" };
+                let retry = if info.retryable { crate::t!("conv-retryable") } else { String::new() };
                 self.items.push(ConvItem::Line(ConvLine::empty()));
                 self.items.push(ConvItem::Line(ConvLine::block(
-                    format!(
-                        "!! [{} · {:?}{retry}] {}",
-                        info.code, info.kind, info.message
+                    crate::t!(
+                        "conv-error-format",
+                        code = info.code,
+                        kind = format!("{:?}", info.kind),
+                        retry = retry,
+                        message = info.message
                     ),
                     style::error_block(),
                     block_error(),

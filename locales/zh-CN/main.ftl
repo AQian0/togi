@@ -1,0 +1,66 @@
+# Chinese (Simplified) translations for togi UI
+
+# ── CLI ──────────────────────────────────────────────────────────────
+cli-about = 终端里的 AI 编程助手
+cli-long-about = togi 是一个运行在终端里的 AI 编程助手，支持多模型切换、文件操作、Shell 命令执行等功能。
+
+# ── Builtin Commands ─────────────────────────────────────────────────
+builtins-help-title = 可用命令
+builtins-shortcuts-title = 快捷键
+builtins-shortcut-esc = Esc           取消当前回答 / 清空当前输入
+builtins-shortcut-ctrl-c = Ctrl-C        退出
+builtins-shortcut-page = PageUp/PageDown  滚动对话历史
+
+builtins-help-desc = 显示这份帮助
+builtins-clear-desc = 清空对话历史并重置屏幕
+builtins-cwd-desc = 显示当前工作目录
+builtins-exit-desc = 退出（也可用 exit / quit / 退出 或 Ctrl-C）
+
+builtins-clear-done = 已清空对话历史（共 { $count } 条消息）。
+builtins-cwd-display = 当前工作目录：{ $cwd }
+builtins-unknown-command = 未知命令 `{ $command }`。输入 /help 查看可用命令。
+
+# ── App ──────────────────────────────────────────────────────────────
+app-cancelled = 已取消。
+app-session-error = Session 错误：{ $error }
+app-history-save-error = 无法保存输入历史：{ $error }
+
+# ── Agent ────────────────────────────────────────────────────────────
+agent-esc-interrupted = Esc 已中断当前回答。
+agent-unknown-provider = 无法识别模型 "{ $model }" 对应的提供商。支持的提供商：{ $supported }
+agent-missing-api-key = 未设置 { $env } 环境变量
+agent-provider-init = 无法初始化 { $provider } 提供商：{ $source }
+agent-stream-error = 模型流式响应失败：{ $source }
+
+# ── Summarize ────────────────────────────────────────────────────────
+summarize-write = 写入
+summarize-write-binary = 写入 · 二进制
+summarize-replace = 替换
+summarize-edits = { $count } 处改动
+summarize-readonly-result = （已读取 { $lines } 行，内容已省略）
+
+# ── Common ───────────────────────────────────────────────────────────
+common-no-changes = （无改动）
+common-truncation-notice = （显示了 { $shown } / { $total } { $unit }；用 `shell` 工具的 `tail`、`head` 或 `sed` 命令查看其余部分）
+
+# ── Config ───────────────────────────────────────────────────────────
+config-loaded = [togi] 已加载配置文件：{ $path }
+
+# ── Errors (user-facing) ────────────────────────────────────────────
+error-not-found = 未找到文件：`{ $path }`。请检查路径后重试。
+error-permission-denied = 权限不足，无法访问：`{ $path }`。
+error-not-a-file = `{ $path }` 是目录，不是文件。请提供文件路径。
+error-not-utf8 = `{ $path }` 不是有效的 UTF-8 文本，无法按字符串编辑。
+error-default-model-init = 无法初始化默认模型 (deepseek-v4-pro)：{ $source }。请设置 DEEPSEEK_API_KEY 环境变量，或在 togi.toml 中通过 system.model 指定其他模型。
+
+# ── Conversation ─────────────────────────────────────────────────────
+conv-user-label = 用户
+conv-reasoning-label = 思考过程
+conv-answer-label = 回答
+conv-empty-output = （无输出）
+conv-folded-lines = … 其余 { $count } 行（已折叠）
+conv-retryable =  · 可重试
+conv-error-format = !! [{ $code } · { $kind }{ $retry }] { $message }
+
+# ── Render ───────────────────────────────────────────────────────────
+render-scroll-indicator = ── 回到底部 (PageDown) ──

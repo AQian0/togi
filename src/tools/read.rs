@@ -124,6 +124,17 @@ impl TogiError for ReadError {
             Self::Io { .. } => ErrorKind::Io,
         }
     }
+
+    fn user_message(&self) -> String {
+        match self {
+            Self::NotFound { path } => crate::t!("error-not-found", path = path.clone()),
+            Self::NotAFile { path } => crate::t!("error-not-a-file", path = path.clone()),
+            Self::PermissionDenied { path } => {
+                crate::t!("error-permission-denied", path = path.clone())
+            }
+            _ => self.to_string(),
+        }
+    }
 }
 
 impl Tool for Read {

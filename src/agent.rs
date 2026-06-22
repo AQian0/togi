@@ -58,6 +58,23 @@ impl TogiError for AgentError {
             Self::ProviderInit { .. } | Self::Stream { .. } => ErrorKind::External,
         }
     }
+
+    fn user_message(&self) -> String {
+        match self {
+            Self::UnknownProvider { model, supported } => {
+                crate::t!("agent-unknown-provider", model = model.clone(), supported = supported.clone())
+            }
+            Self::MissingApiKey { env, source: _ } => {
+                crate::t!("agent-missing-api-key", env = *env)
+            }
+            Self::ProviderInit { provider, source } => {
+                crate::t!("agent-provider-init", provider = *provider, source = source.to_string())
+            }
+            Self::Stream { source } => {
+                crate::t!("agent-stream-error", source = source.to_string())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +102,7 @@ type ChatFn = dyn Fn(String, Arc<[Message]>, AgentEventSender, watch::Receiver<b
     + Sync;
 
 fn cancel_return(tx: &AgentEventSender, history: &Arc<[Message]>) -> Vec<Message> {
-    let _ = tx.send(AgentEvent::Notice("Esc 已中断当前回答。".to_string()));
+    let _ = tx.send(AgentEvent::Notice(crate::t!("agent-esc-interrupted")));
     history.to_vec()
 }
 

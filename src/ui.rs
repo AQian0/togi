@@ -35,6 +35,17 @@ impl TogiError for UiError {
             Self::Terminal(_) | Self::HistorySave { .. } => ErrorKind::Io,
         }
     }
+
+    fn user_message(&self) -> String {
+        match self {
+            Self::Terminal(source) => {
+                crate::t!("app-session-error", error = source.to_string())
+            }
+            Self::HistorySave { source } => {
+                crate::t!("app-history-save-error", error = source.to_string())
+            }
+        }
+    }
 }
 
 pub enum OutputItem {
@@ -67,7 +78,7 @@ impl ErrorInfo {
             code: error.code(),
             kind: error.kind(),
             retryable: error.retryable(),
-            message: error.to_string(),
+            message: error.user_message(),
         }
     }
 }

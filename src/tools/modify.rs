@@ -191,6 +191,18 @@ impl TogiError for ModifyError {
             Self::Io { .. } => ErrorKind::Io,
         }
     }
+
+    fn user_message(&self) -> String {
+        match self {
+            Self::NotFound { path } => crate::t!("error-not-found", path = path.clone()),
+            Self::NotAFile { path } => crate::t!("error-not-a-file", path = path.clone()),
+            Self::PermissionDenied { path } => {
+                crate::t!("error-permission-denied", path = path.clone())
+            }
+            Self::NotUtf8 { path } => crate::t!("error-not-utf8", path = path.clone()),
+            _ => self.to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]

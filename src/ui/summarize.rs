@@ -27,18 +27,16 @@ pub fn summarize_modify(value: &Value) -> String {
         .map(truncate_inline)
         .unwrap_or_default();
     let action = if value.get("content_base64").is_some() {
-        "写入 · 二进制"
+        crate::t!("summarize-write-binary")
     } else if value.get("content").is_some() {
-        "写入"
+        crate::t!("summarize-write")
     } else if let Some(edits) = value.get("edits").and_then(Value::as_array) {
-        return format!(
-            "{path} · {} 处改动",
-            edits.len() + usize::from(value.get("old_text").is_some())
-        );
+        let count = edits.len() + usize::from(value.get("old_text").is_some());
+        return format!("{path} · {}", crate::t!("summarize-edits", count = count));
     } else if value.get("old_text").is_some() {
-        "替换"
+        crate::t!("summarize-replace")
     } else {
-        ""
+        String::new()
     };
     if action.is_empty() {
         path
@@ -76,7 +74,7 @@ pub fn summarize_readonly_result(text: &str) -> String {
     if lines <= 1 {
         text.trim_end().to_string()
     } else {
-        format!("（已读取 {lines} 行，内容已省略）")
+        crate::t!("summarize-readonly-result", lines = lines)
     }
 }
 
@@ -116,7 +114,8 @@ mod tests {
     #[test]
     fn modify_summary_reports_write() {
         let v = serde_json::json!({"path": "a.txt", "content": "x"});
-        assert_eq!(summarize_call("modify", &v), "a.txt · 写入");
+        let expected = format!("a.txt · {}", crate::t!("summarize-write"));
+        assert_eq!(summarize_call("modify", &v), expected);
     }
     #[test]
     fn modify_summary_counts_edits() {
@@ -124,17 +123,20 @@ mod tests {
             "path": "a.txt",
             "edits": [{"old_text": "a", "new_text": "b"}, {"old_text": "c", "new_text": "d"}]
         });
-        assert_eq!(summarize_call("modify", &v), "a.txt · 2 处改动");
+        let expected = format!("a.txt · {}", crate::t!("summarize-edits", count = 2));
+        assert_eq!(summarize_call("modify", &v), expected);
     }
     #[test]
     fn modify_summary_reports_replace() {
         let v = serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b"});
-        assert_eq!(summarize_call("modify", &v), "a.txt · 替换");
+        let expected = format!("a.txt · {}", crate::t!("summarize-replace"));
+        assert_eq!(summarize_call("modify", &v), expected);
     }
     #[test]
     fn readonly_result_collapses_multiline_content() {
         let out = summarize_readonly_result("1 | foo\n2 | bar\n3 | baz");
-        assert_eq!(out, "（已读取 3 行，内容已省略）");
+        let expected = crate::t!("summarize-readonly-result", lines = 3);
+        assert_eq!(out, expected);
     }
 
     #[test]

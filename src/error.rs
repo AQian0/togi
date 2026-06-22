@@ -31,6 +31,14 @@ pub trait TogiError: std::error::Error {
     /// 粗粒度错误分类，用于 UI、日志、重试策略等。
     fn kind(&self) -> ErrorKind;
 
+    /// 面向用户展示的本地化消息。
+    ///
+    /// 与 `Display`（面向 LLM 的英文技术描述）不同，此方法返回
+    /// 适合在终端 UI 中展示的翻译后消息。默认回退到 `Display`。
+    fn user_message(&self) -> String {
+        self.to_string()
+    }
+
     /// 是否值得在相同输入之外重试。默认只对环境性错误返回 true。
     fn retryable(&self) -> bool {
         matches!(
@@ -103,6 +111,21 @@ impl TogiError for AppError {
             Self::Io(_) => ErrorKind::Io,
             Self::Cancelled => ErrorKind::Cancelled,
             Self::Internal(_) => ErrorKind::Internal,
+        }
+    }
+
+    fn user_message(&self) -> String {
+        match self {
+            Self::Config(err) => err.user_message(),
+            Self::Theme(err) => err.user_message(),
+            Self::Agent(err) => err.user_message(),
+            Self::Ui(err) => err.user_message(),
+            Self::DefaultModelInit { source } => {
+                crate::t!("error-default-model-init", source = source.to_string())
+            }
+            Self::TaskJoin(_) | Self::Io(_) | Self::Cancelled | Self::Internal(_) => {
+                self.to_string()
+            }
         }
     }
 }

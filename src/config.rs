@@ -33,6 +33,11 @@ impl TogiError for ConfigError {
             Self::Parse { .. } => ErrorKind::InvalidArgument,
         }
     }
+
+    fn user_message(&self) -> String {
+        // ConfigError 的 Display 已经是面向用户的中文/英文，无需额外翻译。
+        self.to_string()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -88,7 +93,10 @@ impl Config {
                         source,
                     })?;
                 if log_enabled() {
-                    eprintln!("[togi] 已加载配置文件：{}", candidate.display());
+                    eprintln!(
+                        "{}",
+                        crate::t!("config-loaded", path = candidate.display().to_string())
+                    );
                 }
                 return Ok(config);
             }

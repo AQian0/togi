@@ -343,7 +343,7 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
                 .collect();
             if scrolled_up {
                 final_lines.push(Line::from(Span::styled(
-                    "── 回到底部 (PageDown) ──",
+                    crate::t!("render-scroll-indicator"),
                     dim_style,
                 )));
             }
