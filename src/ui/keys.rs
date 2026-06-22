@@ -18,7 +18,7 @@ pub(crate) enum Action {
 
 /// 判断输入是否为退出命令。
 pub(crate) fn is_exit_command(input: &str) -> bool {
-    matches!(input, "exit" | "quit" | "退出" | "/exit" | "/quit")
+    matches!(input, "exit" | "quit" | "/exit" | "/quit")
 }
 
 impl Session {

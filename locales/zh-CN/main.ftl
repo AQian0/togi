@@ -14,7 +14,7 @@ builtins-shortcut-page = PageUp/PageDown  滚动对话历史
 builtins-help-desc = 显示这份帮助
 builtins-clear-desc = 清空对话历史并重置屏幕
 builtins-cwd-desc = 显示当前工作目录
-builtins-exit-desc = 退出（也可用 exit / quit / 退出 或 Ctrl-C）
+builtins-exit-desc = 退出（也可用 exit / quit 或 Ctrl-C）
 
 builtins-clear-done = 已清空对话历史（共 { $count } 条消息）。
 builtins-cwd-display = 当前工作目录：{ $cwd }

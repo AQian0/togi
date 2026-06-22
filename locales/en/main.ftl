@@ -14,7 +14,7 @@ builtins-shortcut-page = PageUp/PageDown  Scroll conversation history
 builtins-help-desc = Show this help
 builtins-clear-desc = Clear conversation history and reset screen
 builtins-cwd-desc = Show current working directory
-builtins-exit-desc = Exit (also via exit / quit / 退出 or Ctrl-C)
+builtins-exit-desc = Exit (also via exit / quit or Ctrl-C)
 
 builtins-clear-done = Cleared conversation history ({ $count } messages).
 builtins-cwd-display = Current working directory: { $cwd }

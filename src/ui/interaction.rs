@@ -16,7 +16,6 @@ mod tests {
     #[test]
     fn exit_commands_recognised() {
         assert!(is_exit_command("exit"));
-        assert!(is_exit_command("退出"));
         assert!(!is_exit_command("hello"));
     }
 }
