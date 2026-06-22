@@ -7827,6 +7827,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml",
+ "unic-langid",
 ]
 
 [[package]]
