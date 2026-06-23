@@ -199,12 +199,29 @@ pub(crate) async fn streaming_read_text(
 }
 
 /// 通过采样的启发式判断字节序列是否为二进制内容。
-/// 规则：包含 null 字节，或不可打印字符（排除 \n \r \t）占比超过阈值。
+///
+/// 规则（按优先级）：
+/// 1. 如果以已知文本编码的 BOM 开头，直接判定为文本。
+/// 2. 如果包含 null 字节，判定为二进制。
+/// 3. 如果不可打印字符（排除 \n \r \t）占比超过阈值，判定为二进制。
 #[must_use]
 pub(crate) fn is_binary(data: &[u8]) -> bool {
     if data.is_empty() {
         return false;
     }
+
+    // BOM 检测：避免 UTF-16/32 等编码因高位零字节被误判为二进制。
+    const BOMS: &[&[u8]] = &[
+        &[0xEF, 0xBB, 0xBF],       // UTF-8
+        &[0xFF, 0xFE],              // UTF-16 LE
+        &[0xFE, 0xFF],              // UTF-16 BE
+        &[0x00, 0x00, 0xFE, 0xFF], // UTF-32 BE
+        &[0xFF, 0xFE, 0x00, 0x00], // UTF-32 LE
+    ];
+    if BOMS.iter().any(|bom| data.starts_with(bom)) {
+        return false;
+    }
+
     let check_len = data.len().min(constants::BINARY_DETECTION_SAMPLE_SIZE);
     let slice = &data[..check_len];
     if slice.contains(&0) {
