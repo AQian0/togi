@@ -7811,6 +7811,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "dirs",
+ "encoding_rs",
  "fluent",
  "futures",
  "itertools 0.14.0",
