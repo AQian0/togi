@@ -36,7 +36,10 @@ impl TerminalModeGuard {
         if !self.active {
             return;
         }
-        let _ = execute!(io::stdout(), ratatui::crossterm::event::DisableBracketedPaste);
+        let _ = execute!(
+            io::stdout(),
+            ratatui::crossterm::event::DisableBracketedPaste
+        );
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         let _ = disable_raw_mode();
         self.active = false;

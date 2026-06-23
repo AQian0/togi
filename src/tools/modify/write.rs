@@ -2,6 +2,7 @@ use super::edit::unified_diff_blocking;
 use super::{Modify, ModifyError};
 use crate::common::{append_diff, format_size};
 use crate::constants;
+use crate::text_encoding::{decode_text, encode_text};
 use std::path::Path;
 
 #[must_use]
@@ -17,6 +18,7 @@ pub(super) async fn write_text_file(
     display: &str,
     content: &str,
     dry_run: bool,
+    requested_encoding: Option<&'static encoding_rs::Encoding>,
 ) -> Result<String, ModifyError> {
     let existed = tokio::fs::try_exists(path)
         .await
@@ -45,14 +47,18 @@ pub(super) async fn write_text_file(
                 )),
             )
         } else {
-            match tokio::fs::read_to_string(path).await {
-                Ok(text) => (Some(text), mtime, perms, None),
-                Err(source) if source.kind() == std::io::ErrorKind::InvalidData => (
-                    None,
-                    mtime,
-                    perms,
-                    Some("diff skipped — existing file is not valid UTF-8".to_string()),
-                ),
+            match tokio::fs::read(path).await {
+                Ok(bytes) => match decode_text(&bytes, requested_encoding) {
+                    Ok(decoded) => (Some(decoded.text), mtime, perms, None),
+                    Err(source) => (
+                        None,
+                        mtime,
+                        perms,
+                        Some(format!(
+                            "diff skipped — could not decode existing file: {source}"
+                        )),
+                    ),
+                },
                 Err(source) => (
                     None,
                     mtime,
@@ -110,10 +116,12 @@ pub(super) async fn write_text_file(
         true
     };
 
-    let warning = super::atomic::write_text::<ModifyError>(
+    let encoding = requested_encoding.unwrap_or(encoding_rs::UTF_8);
+    let data = encode_text(content, encoding, &[])?;
+    let warning = super::atomic::write_bytes::<ModifyError>(
         path,
         display,
-        content,
+        &data,
         preserve_perms,
         mtime_before,
     )

@@ -93,10 +93,7 @@ fn detect_locale() -> Option<LanguageIdentifier> {
     }
     // 2. Unix locale 环境变量（LC_ALL 优先级最高）
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Some(id) = std::env::var(var)
-            .ok()
-            .and_then(|s| normalize_lang(&s))
-        {
+        if let Some(id) = std::env::var(var).ok().and_then(|s| normalize_lang(&s)) {
             return Some(id);
         }
     }
@@ -106,9 +103,7 @@ fn detect_locale() -> Option<LanguageIdentifier> {
 
 fn lang() -> &'static LanguageIdentifier {
     LANG.get_or_init(|| {
-        detect_locale().unwrap_or_else(|| {
-            "en".parse::<LanguageIdentifier>().expect("valid langid")
-        })
+        detect_locale().unwrap_or_else(|| "en".parse::<LanguageIdentifier>().expect("valid langid"))
     })
 }
 
@@ -152,8 +147,8 @@ fn make_bundle() -> FluentBundle<FluentResource> {
         .parse::<LanguageIdentifier>()
         .expect("resolved tag is a valid langid");
     let mut bundle = FluentBundle::new(vec![langid]);
-    let res = FluentResource::try_new(ftl_source().to_string())
-        .expect("Failed to parse FTL resource");
+    let res =
+        FluentResource::try_new(ftl_source().to_string()).expect("Failed to parse FTL resource");
     bundle
         .add_resource(res)
         .expect("Failed to add FTL resource");

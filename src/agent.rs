@@ -15,7 +15,9 @@ use tokio::sync::watch;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    #[error("could not identify the provider for model \"{model}\". Supported providers: {supported}")]
+    #[error(
+        "could not identify the provider for model \"{model}\". Supported providers: {supported}"
+    )]
     UnknownProvider { model: String, supported: String },
 
     #[error("{env} environment variable not set: {source}")]
@@ -52,22 +54,30 @@ impl TogiError for AgentError {
     fn kind(&self) -> ErrorKind {
         match self {
             Self::UnknownProvider { .. } => ErrorKind::InvalidArgument,
-            Self::MissingApiKey { .. }
-            | Self::ProviderInit { .. }
-            | Self::Stream { .. } => ErrorKind::External,
+            Self::MissingApiKey { .. } | Self::ProviderInit { .. } | Self::Stream { .. } => {
+                ErrorKind::External
+            }
         }
     }
 
     fn user_message(&self) -> String {
         match self {
             Self::UnknownProvider { model, supported } => {
-                crate::t!("agent-unknown-provider", model = model.clone(), supported = supported.clone())
+                crate::t!(
+                    "agent-unknown-provider",
+                    model = model.clone(),
+                    supported = supported.clone()
+                )
             }
             Self::MissingApiKey { env, source: _ } => {
                 crate::t!("agent-missing-api-key", env = *env)
             }
             Self::ProviderInit { provider, source } => {
-                crate::t!("agent-provider-init", provider = *provider, source = source.to_string())
+                crate::t!(
+                    "agent-provider-init",
+                    provider = *provider,
+                    source = source.to_string()
+                )
             }
             Self::Stream { source } => {
                 crate::t!("agent-stream-error", source = source.to_string())

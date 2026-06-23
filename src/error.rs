@@ -136,7 +136,11 @@ impl TogiError for AppError {
             }
             Self::TaskJoin(_) | Self::Internal(_) => self.to_string(),
             Self::Io { context, source } => {
-                crate::t!("app-io-error", context = (*context).to_string(), error = source.to_string())
+                crate::t!(
+                    "app-io-error",
+                    context = (*context).to_string(),
+                    error = source.to_string()
+                )
             }
             Self::Cancelled => crate::t!("app-cancelled"),
         }

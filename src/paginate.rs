@@ -332,9 +332,7 @@ mod tests {
     #[tokio::test]
     async fn offset_zero_rejected_at_tool_level() {
         let tool = paginate(0, RawEcho);
-        let result = tool
-            .call(r#"{"text":"hi","offset":0}"#.to_string())
-            .await;
+        let result = tool.call(r#"{"text":"hi","offset":0}"#.to_string()).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(

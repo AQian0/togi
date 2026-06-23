@@ -194,7 +194,11 @@ impl TogiError for ShellError {
                 crate::t!("error-shell-timeout", secs = *secs)
             }
             Self::Spawn { cwd, source } => {
-                crate::t!("error-shell-spawn", cwd = cwd.clone(), error = source.to_string())
+                crate::t!(
+                    "error-shell-spawn",
+                    cwd = cwd.clone(),
+                    error = source.to_string()
+                )
             }
             Self::Io { source } => {
                 crate::t!("error-shell-io", error = source.to_string())

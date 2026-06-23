@@ -1,7 +1,7 @@
 use crate::constants;
 use crate::ui::markdown;
-use crate::ui::{OutputItem, SectionKind};
 use crate::ui::style;
+use crate::ui::{OutputItem, SectionKind};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
@@ -327,7 +327,11 @@ impl Conversation {
             OutputItem::Error(info) => {
                 self.flush_md();
                 self.md_block = None;
-                let retry = if info.retryable { crate::t!("conv-retryable") } else { String::new() };
+                let retry = if info.retryable {
+                    crate::t!("conv-retryable")
+                } else {
+                    String::new()
+                };
                 self.items.push(ConvItem::Line(ConvLine::empty()));
                 self.items.push(ConvItem::Line(ConvLine::block(
                     crate::t!(
@@ -433,8 +437,8 @@ fn block_error() -> BlockStyle {
 #[cfg(test)]
 mod tests {
     use crate::error::ErrorKind;
-    use crate::ui::{ErrorInfo, OutputItem};
     use crate::ui::style;
+    use crate::ui::{ErrorInfo, OutputItem};
 
     fn has_block_bg(conv: &super::Conversation, want: Option<ratatui::style::Color>) -> bool {
         conv.all_lines_with_align()

@@ -3,6 +3,7 @@ use crate::common::{
 };
 use crate::constants;
 use crate::error::{ErrorKind, TogiError};
+use crate::text_encoding::{decode_text, encoding_from_label, is_binary_output_encoding};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
@@ -54,9 +55,10 @@ pub struct ReadArgs {
     #[serde(default)]
     #[schemars(skip)]
     cwd: Option<PathBuf>,
-    /// Output encoding for binary files. Use `"hex"` (default) for a hexdump
-    /// preview, or `"base64"` for the full base64-encoded content. Ignored for
-    /// text files.
+    /// Output encoding. Use `"hex"` (default) or `"base64"` for binary files.
+    /// For text files, pass an encoding label such as `"utf-8"`, `"utf-16le"`,
+    /// `"gbk"`, `"shift_jis"`, or `"windows-1252"`; when omitted, UTF-8 is
+    /// assumed unless the file has a UTF-8/UTF-16 BOM.
     #[serde(default)]
     encoding: Option<String>,
     /// Byte offset into the file to start reading from. Defaults to 0 (start).
@@ -88,7 +90,9 @@ pub enum ReadError {
     PermissionDenied { path: String },
     #[error(transparent)]
     FileTooLarge(#[from] FileTooLargeError),
-    #[error("unsupported encoding `{enc}`. Use `hex` or `base64`.")]
+    #[error(
+        "unsupported encoding `{enc}`. Use `hex`, `base64`, or a text encoding label such as `utf-8`, `utf-16le`, `gbk`, `shift_jis`, or `windows-1252`."
+    )]
     InvalidEncoding { enc: String },
     #[error("io error while reading `{path}`: {source}")]
     Io {
@@ -163,10 +167,13 @@ impl Tool for Read {
                           `path` may be absolute or relative to the injected `cwd`. For binary \
                           files the output includes file size and a hexdump of the first 512 \
                           bytes by default; pass `encoding: \"base64\"` to get the full \
-                          base64-encoded content instead. For large text files (>10 MB) only the \
-                          first 50 KB are returned by default; use `offset_bytes` and `limit_bytes` \
-                          to read specific portions. Files larger than 100 MB are rejected — use \
-                          the `shell` tool with commands like `head`, `tail`, or `sed` for those. \
+                          base64-encoded content instead. For text files, `encoding` may be a \
+                          label such as `utf-8`, `utf-16le`, `gbk`, `shift_jis`, or \
+                          `windows-1252`; when omitted, UTF-8 is assumed unless the file has a \
+                          UTF-8/UTF-16 BOM. For large text files (>10 MB) only the first 50 KB \
+                          are returned by default; use `offset_bytes` and `limit_bytes` to read \
+                          specific portions. Files larger than 100 MB are rejected — use the \
+                          `shell` tool with commands like `head`, `tail`, or `sed` for those. \
                           On failure the tool returns a descriptive error explaining how to fix \
                           the call."
                 .to_string(),
@@ -199,11 +206,20 @@ impl Tool for Read {
         let offset_bytes = args.offset_bytes.unwrap_or(0);
         let remaining_bytes = file_size.saturating_sub(offset_bytes);
         let encoding = args.encoding.as_deref().unwrap_or("hex");
+        let requested_text_encoding = args
+            .encoding
+            .as_deref()
+            .filter(|label| !is_binary_output_encoding(label))
+            .map(encoding_from_label)
+            .transpose()
+            .map_err(|err| ReadError::InvalidEncoding {
+                enc: err.to_string(),
+            })?;
 
         let head = io::read_head_from_file(&mut file, file_size)
             .await
             .map_err(|source| Self::map_io(source, display.clone()))?;
-        let binary = is_binary(&head);
+        let binary = requested_text_encoding.is_none() && is_binary(&head);
 
         if binary {
             return binary::read_binary(binary::BinaryReadRequest {
@@ -224,7 +240,22 @@ impl Tool for Read {
                 .limit_bytes
                 .unwrap_or(constants::DEFAULT_MAX_READ_BYTES)
                 .min(remaining_bytes);
-            return text::read_streaming(&path, &display, file_size, offset_bytes, limit).await;
+            let streaming_encoding = requested_text_encoding.or_else(|| {
+                if offset_bytes == 0 {
+                    crate::text_encoding::encoding_for_bom(&head).map(|(encoding, _)| encoding)
+                } else {
+                    None
+                }
+            });
+            return text::read_streaming(
+                &path,
+                &display,
+                file_size,
+                offset_bytes,
+                limit,
+                streaming_encoding,
+            )
+            .await;
         }
 
         // Small text file: cursor is past the detection head; seek back to
@@ -237,10 +268,12 @@ impl Tool for Read {
             .await
             .map_err(|source| Self::map_io(source, display.clone()))?;
 
-        let content = String::from_utf8(buf).map_err(|source| ReadError::Io {
-            path: display,
-            source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
-        })?;
+        let content = decode_text(&buf, requested_text_encoding)
+            .map_err(|source| ReadError::Io {
+                path: display,
+                source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+            })?
+            .text;
         Ok(text::render(&content))
     }
 }

@@ -4,6 +4,7 @@
 //! 对话内容在上方滚动输出。提交后不清除输入区，流式回答实时刷入上方对话区。
 
 use crate::constants;
+use crate::ui::OutputItem;
 use crate::ui::conversation::Conversation;
 use crate::ui::editor::Editor;
 use crate::ui::history::History;
@@ -11,7 +12,6 @@ use crate::ui::keys::Action;
 use crate::ui::render::{self, prefix_width};
 use crate::ui::style;
 use crate::ui::terminal::{EventPump, TerminalModeGuard};
-use crate::ui::OutputItem;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -189,17 +189,15 @@ impl Session {
                     Action::Paste => self.paste_from_clipboard().await,
                 }
             }
-            Event::Mouse(mouse) => {
-                match mouse.kind {
-                    MouseEventKind::ScrollUp => {
-                        self.conv_scroll_offset = self.conv_scroll_offset.saturating_add(1);
-                    }
-                    MouseEventKind::ScrollDown => {
-                        self.conv_scroll_offset = self.conv_scroll_offset.saturating_sub(1);
-                    }
-                    _ => {}
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.conv_scroll_offset = self.conv_scroll_offset.saturating_add(1);
                 }
-            }
+                MouseEventKind::ScrollDown => {
+                    self.conv_scroll_offset = self.conv_scroll_offset.saturating_sub(1);
+                }
+                _ => {}
+            },
             Event::Paste(data) if !self.submitting => {
                 self.detach_history();
                 self.editor.insert_str(&data);

@@ -2,6 +2,7 @@ use crate::common::{
     FileTooLargeError, IoErrorClass, ToolPathError, classify_io_error, resolve_tool_path,
 };
 use crate::error::{ErrorKind, TogiError};
+use crate::text_encoding::{TextEncodingError, encoding_from_label};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
@@ -61,6 +62,12 @@ pub struct ModifyArgs {
     /// with `content`, `old_text`, `new_text`, or `edits`.
     #[serde(default)]
     content_base64: Option<String>,
+    /// Text encoding label for `content` and text edits, such as `utf-8`,
+    /// `utf-16le`, `gbk`, `shift_jis`, or `windows-1252`. When omitted, edits
+    /// assume UTF-8 unless the file has a UTF-8/UTF-16 BOM; whole-file `content`
+    /// writes use UTF-8 unless an encoding is specified.
+    #[serde(default)]
+    encoding: Option<String>,
     /// When `true`, compute and return the diff without actually modifying the
     /// file. Defaults to `false`.
     #[serde(default)]
@@ -98,6 +105,12 @@ pub enum ModifyError {
     },
     #[error("`old_text` must not be empty. Provide the exact text to replace.")]
     EmptyOldText,
+    #[error(
+        "unsupported text encoding `{enc}`. Use a label such as `utf-8`, `utf-16le`, `gbk`, `shift_jis`, or `windows-1252`."
+    )]
+    InvalidEncoding { enc: String },
+    #[error(transparent)]
+    TextEncoding(#[from] TextEncodingError),
     #[error(transparent)]
     FileTooLarge(#[from] FileTooLargeError),
     #[error("no such file: `{path}`. Double-check the path, then retry.")]
@@ -159,6 +172,8 @@ impl TogiError for ModifyError {
             Self::ConflictingBase64 => "modify.conflicting_base64",
             Self::InvalidBase64 { .. } => "modify.invalid_base64",
             Self::EmptyOldText => "modify.empty_old_text",
+            Self::InvalidEncoding { .. } => "modify.invalid_encoding",
+            Self::TextEncoding(_) => "modify.text_encoding",
             Self::FileTooLarge(_) => "modify.file_too_large",
             Self::NotFound { .. } => "modify.not_found",
             Self::NotAFile { .. } => "modify.not_a_file",
@@ -178,7 +193,9 @@ impl TogiError for ModifyError {
             | Self::ConflictingInstructions
             | Self::ConflictingBase64
             | Self::InvalidBase64 { .. }
-            | Self::EmptyOldText => ErrorKind::InvalidArgument,
+            | Self::EmptyOldText
+            | Self::InvalidEncoding { .. }
+            | Self::TextEncoding(_) => ErrorKind::InvalidArgument,
             Self::MissingCwd => ErrorKind::MissingRuntimeInjection,
             Self::OldTextNotFound { .. }
             | Self::OldTextNotUnique { .. }
@@ -301,6 +318,9 @@ impl Tool for Modify {
                           `edits` array for multiple replacements. Each `old_text` must match \
                           exactly once in the original file and the matches must not overlap. \
                           `content`, `content_base64`, and the edit fields are mutually exclusive. \
+                          Text operations accept an optional `encoding` label such as `utf-8`, \
+                          `utf-16le`, `gbk`, `shift_jis`, or `windows-1252`; edits preserve \
+                          detected BOM encodings and explicit encodings. \
                           Writes are atomic (temp file + rename), so a failed write never \
                           corrupts the original. Use `dry_run: true` to preview changes \
                           without modifying. On failure the tool returns a descriptive error \
@@ -315,12 +335,21 @@ impl Tool for Modify {
         let path = Self::resolve_symlinks(&raw_path).await?;
         let display = raw_path.display().to_string();
         let dry_run = args.dry_run.unwrap_or(false);
+        let text_encoding = args
+            .encoding
+            .as_deref()
+            .map(encoding_from_label)
+            .transpose()
+            .map_err(|err| ModifyError::InvalidEncoding {
+                enc: err.to_string(),
+            })?;
 
         if let Some(b64) = args.content_base64.as_deref() {
             let has_conflict = args.content.is_some()
                 || args.old_text.is_some()
                 || args.new_text.is_some()
-                || args.edits.is_some();
+                || args.edits.is_some()
+                || args.encoding.is_some();
             if has_conflict {
                 return Err(ModifyError::ConflictingBase64);
             }
@@ -337,7 +366,7 @@ impl Tool for Modify {
             return Err(ModifyError::ConflictingInstructions);
         }
         if let Some(content) = args.content.as_deref() {
-            return write::write_text_file(&path, &display, content, dry_run).await;
+            return write::write_text_file(&path, &display, content, dry_run, text_encoding).await;
         }
 
         let mut replacements: Vec<Replacement<'_>> = Vec::new();
@@ -358,6 +387,6 @@ impl Tool for Modify {
         if replacements.is_empty() {
             return Err(ModifyError::NoInstructions);
         }
-        edit::edit_file(&path, &display, &replacements, dry_run).await
+        edit::edit_file(&path, &display, &replacements, dry_run, text_encoding).await
     }
 }

@@ -9,10 +9,7 @@ static HELP_ROWS: &[(&str, &str)] = &[
     ("/help", "builtins-help-desc"),
     ("/clear", "builtins-clear-desc"),
     ("/cwd", "builtins-cwd-desc"),
-    (
-        "/exit、/quit",
-        "builtins-exit-desc",
-    ),
+    ("/exit、/quit", "builtins-exit-desc"),
 ];
 
 pub async fn handle_command(
@@ -47,10 +44,7 @@ pub async fn handle_command(
             send_notice(&tx, &crate::t!("builtins-cwd-display", cwd = cwd));
         }
         other => {
-            send_notice(
-                &tx,
-                &crate::t!("builtins-unknown-command", command = other),
-            );
+            send_notice(&tx, &crate::t!("builtins-unknown-command", command = other));
         }
     }
     tx.send(OutputItem::Done).is_ok()

@@ -1,5 +1,5 @@
-use super::{Read, ReadError};
-use crate::common::{format_size, streaming_read_text, truncation_notice};
+use super::{Read, ReadError, io};
+use crate::common::{format_size, streaming_read_text_with_encoding, truncation_notice};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -31,10 +31,21 @@ pub(super) async fn read_streaming(
     file_size: u64,
     offset_bytes: u64,
     limit_bytes: u64,
+    encoding: Option<&'static encoding_rs::Encoding>,
 ) -> Result<String, ReadError> {
-    let (content, _, was_truncated) = streaming_read_text(path, offset_bytes, limit_bytes)
-        .await
-        .map_err(|source| Read::map_io(source, display.to_string()))?;
+    let encoding = encoding.unwrap_or(encoding_rs::UTF_8);
+    let mut effective_offset = offset_bytes;
+    if offset_bytes == 0
+        && let Ok(head) = io::read_chunk(path, 0, 4).await
+        && let Some((bom_encoding, bom_len)) = crate::text_encoding::encoding_for_bom(&head)
+        && std::ptr::eq(bom_encoding, encoding)
+    {
+        effective_offset = bom_len as u64;
+    }
+    let (content, _, was_truncated) =
+        streaming_read_text_with_encoding(path, effective_offset, limit_bytes, encoding)
+            .await
+            .map_err(|source| Read::map_io(source, display.to_string()))?;
 
     let rendered = render(&content);
     let header = if offset_bytes > 0 {

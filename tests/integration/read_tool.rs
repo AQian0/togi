@@ -113,6 +113,40 @@ async fn read_binary_base64_encoding() {
 }
 
 #[tokio::test]
+async fn read_utf16le_bom_text_file() {
+    let dir = std::env::temp_dir();
+    let path = crate::support::temp_path("read-utf16le.txt");
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in "hello 世界\n".encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    std::fs::write(&path, bytes).unwrap();
+
+    let tool = make_tool(&dir);
+    let args = serde_json::json!({"path": path.display().to_string()});
+    let output = tool.call(args.to_string()).await.unwrap();
+    assert!(output.contains("1 | hello 世界"), "got: {output}");
+
+    crate::support::remove_file(&path);
+}
+
+#[tokio::test]
+async fn read_gbk_text_file_with_explicit_encoding() {
+    let dir = std::env::temp_dir();
+    let path = crate::support::temp_path("read-gbk.txt");
+    let (bytes, _, had_errors) = encoding_rs::GBK.encode("中文\n");
+    assert!(!had_errors);
+    std::fs::write(&path, &bytes).unwrap();
+
+    let tool = make_tool(&dir);
+    let args = serde_json::json!({"path": path.display().to_string(), "encoding": "gbk"});
+    let output = tool.call(args.to_string()).await.unwrap();
+    assert!(output.contains("1 | 中文"), "got: {output}");
+
+    crate::support::remove_file(&path);
+}
+
+#[tokio::test]
 async fn read_rejects_invalid_encoding() {
     let dir = std::env::temp_dir();
     let path = crate::support::temp_path("read-badenc.bin");

@@ -18,6 +18,7 @@ fn modify_args_schema_should_expose_public_fields_and_hide_injected_cwd() {
     assert!(properties.contains_key("new_text"));
     assert!(properties.contains_key("edits"));
     assert!(properties.contains_key("content_base64"));
+    assert!(properties.contains_key("encoding"));
     assert!(properties.contains_key("dry_run"));
     assert!(!properties.contains_key("cwd"));
 }
@@ -149,6 +150,77 @@ async fn call_should_combine_edits_array_with_single_old_text() {
 
     assert!(output.contains("2 replacements"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "1 two 3");
+    crate::support::remove_file(&path);
+}
+
+#[tokio::test]
+async fn call_should_edit_utf16le_bom_file_preserving_encoding() {
+    let path = crate::support::temp_path("modify-utf16le.txt");
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in "hello 世界".encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    std::fs::write(&path, bytes).unwrap();
+    let tool = tool();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "old_text": "世界",
+        "new_text": "Rust",
+    });
+
+    let output = tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("edited"));
+    let written = std::fs::read(&path).unwrap();
+    assert_eq!(&written[..2], &[0xFF, 0xFE]);
+    let (decoded, had_errors) = encoding_rs::UTF_16LE.decode_without_bom_handling(&written[2..]);
+    assert!(!had_errors);
+    assert_eq!(decoded, "hello Rust");
+    crate::support::remove_file(&path);
+}
+
+#[tokio::test]
+async fn call_should_edit_gbk_file_with_explicit_encoding() {
+    let path = crate::support::temp_path("modify-gbk.txt");
+    let (bytes, _, had_errors) = encoding_rs::GBK.encode("中文 beta");
+    assert!(!had_errors);
+    std::fs::write(&path, &bytes).unwrap();
+    let tool = tool();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "old_text": "beta",
+        "new_text": "版本",
+        "encoding": "gbk",
+    });
+
+    let output = tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("edited"));
+    let written = std::fs::read(&path).unwrap();
+    let (decoded, _, had_errors) = encoding_rs::GBK.decode(&written);
+    assert!(!had_errors);
+    assert_eq!(decoded, "中文 版本");
+    crate::support::remove_file(&path);
+}
+
+#[tokio::test]
+async fn call_should_write_text_file_with_explicit_encoding() {
+    let path = crate::support::temp_path("modify-write-gbk.txt");
+    crate::support::remove_file(&path);
+    let tool = tool();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "content": "中文",
+        "encoding": "gbk",
+    });
+
+    let output = tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("created"));
+    let written = std::fs::read(&path).unwrap();
+    let (decoded, _, had_errors) = encoding_rs::GBK.decode(&written);
+    assert!(!had_errors);
+    assert_eq!(decoded, "中文");
     crate::support::remove_file(&path);
 }
 

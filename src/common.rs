@@ -147,15 +147,12 @@ pub(crate) fn truncation_notice(shown: u64, total: u64, unit: &str) -> String {
     )
 }
 
-/// 流式读取文本文件的一部分，返回文本内容和是否被截断。
-///
-/// 从文件中读取 `offset_bytes..offset_bytes+max_bytes` 范围的字节，
-/// 自动处理 UTF-8 边界对齐（向后退到合法边界）。
-/// 返回 `(text, total_file_size, was_truncated)`。
-pub(crate) async fn streaming_read_text(
+/// 流式读取指定编码的文本文件片段。
+pub(crate) async fn streaming_read_text_with_encoding(
     path: &Path,
     offset_bytes: u64,
     max_bytes: u64,
+    encoding: &'static encoding_rs::Encoding,
 ) -> Result<(String, u64, bool), std::io::Error> {
     let mut file = tokio::fs::File::open(path).await?;
     let metadata = file.metadata().await?;
@@ -167,7 +164,6 @@ pub(crate) async fn streaming_read_text(
 
     file.seek(std::io::SeekFrom::Start(offset_bytes)).await?;
 
-    // 读取 max_bytes + 额外余量用于 UTF-8 边界对齐
     let read_limit = (max_bytes as usize + constants::UTF8_ALIGNMENT_BUFFER)
         .min((file_size - offset_bytes) as usize);
     let mut buf = vec![0u8; read_limit];
@@ -176,25 +172,30 @@ pub(crate) async fn streaming_read_text(
 
     let was_truncated = (offset_bytes + n as u64) < file_size;
 
-    // UTF-8 边界对齐：如果缓冲区末尾切断了多字节字符，向后退
-    let valid_len = if n > 0 {
-        let mut end = n;
-        while end > 0 && std::str::from_utf8(&buf[..end]).is_err() {
-            end -= 1;
-        }
-        end
-    } else {
-        0
-    };
+    if std::ptr::eq(encoding, encoding_rs::UTF_8) {
+        // UTF-8 边界对齐：如果缓冲区末尾切断了多字节字符，向后退
+        let valid_len = if n > 0 {
+            let mut end = n;
+            while end > 0 && std::str::from_utf8(&buf[..end]).is_err() {
+                end -= 1;
+            }
+            end
+        } else {
+            0
+        };
 
-    let text = if valid_len > 0 {
-        buf.truncate(valid_len);
-        String::from_utf8(buf)
-            .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?
-    } else {
-        String::new()
-    };
+        let text = if valid_len > 0 {
+            buf.truncate(valid_len);
+            String::from_utf8(buf).map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?
+        } else {
+            String::new()
+        };
 
+        return Ok((text, file_size, was_truncated));
+    }
+
+    let text = crate::text_encoding::decode_text_without_bom(&buf, encoding)
+        .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
     Ok((text, file_size, was_truncated))
 }
 
@@ -210,15 +211,8 @@ pub(crate) fn is_binary(data: &[u8]) -> bool {
         return false;
     }
 
-    // BOM 检测：避免 UTF-16/32 等编码因高位零字节被误判为二进制。
-    const BOMS: &[&[u8]] = &[
-        &[0xEF, 0xBB, 0xBF],       // UTF-8
-        &[0xFF, 0xFE],              // UTF-16 LE
-        &[0xFE, 0xFF],              // UTF-16 BE
-        &[0x00, 0x00, 0xFE, 0xFF], // UTF-32 BE
-        &[0xFF, 0xFE, 0x00, 0x00], // UTF-32 LE
-    ];
-    if BOMS.iter().any(|bom| data.starts_with(bom)) {
+    // BOM 检测：避免 UTF-8/UTF-16 等编码因高位零字节被误判为二进制。
+    if crate::text_encoding::encoding_for_bom(data).is_some() {
         return false;
     }
 

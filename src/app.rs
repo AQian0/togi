@@ -3,12 +3,12 @@ use crate::command::Args;
 use crate::constants;
 use crate::inject::{CWD_PARAM, Injection, inject};
 use crate::paginate::paginate;
-use crate::tools::{ToolEffect, ToolRegistry};
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
-use crate::ui::interaction::{OutputItem, Session};
+use crate::tools::{ToolEffect, ToolRegistry};
 use crate::ui::ErrorInfo;
+use crate::ui::interaction::{OutputItem, Session};
 use crate::ui::theme::CatppuccinFlavor;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;
@@ -76,7 +76,11 @@ impl AppController {
             // 的副作用类别。
             let mut pending_effect: Option<ToolEffect> = None;
             while let Some(event) = agent_rx.recv().await {
-                let _ = ui_tx.send(crate::transform::to_output(event, &mut pending_effect, &registry));
+                let _ = ui_tx.send(crate::transform::to_output(
+                    event,
+                    &mut pending_effect,
+                    &registry,
+                ));
             }
         });
 
@@ -218,13 +222,19 @@ pub async fn run() -> crate::error::Result<()> {
         if let Err(e) = result {
             eprintln!(
                 "{}",
-                crate::t!("app-session-error", error = crate::error::TogiError::user_message(&e))
+                crate::t!(
+                    "app-session-error",
+                    error = crate::error::TogiError::user_message(&e)
+                )
             );
         }
         if let Err(e) = session.save_history() {
             eprintln!(
                 "{}",
-                crate::t!("app-history-save-error", error = crate::error::TogiError::user_message(&e))
+                crate::t!(
+                    "app-history-save-error",
+                    error = crate::error::TogiError::user_message(&e)
+                )
             );
         }
     });

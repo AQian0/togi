@@ -89,26 +89,6 @@ where
     Ok(mtime_warning)
 }
 
-pub(super) async fn write_text<E>(
-    path: &Path,
-    display: &str,
-    content: &str,
-    preserve_perms: Option<std::fs::Permissions>,
-    expected_mtime: Option<SystemTime>,
-) -> Result<Option<String>, E>
-where
-    E: AtomicWriteFailure,
-{
-    atomic_write_bytes_inner(
-        path,
-        display,
-        content.as_bytes(),
-        preserve_perms,
-        expected_mtime,
-    )
-    .await
-}
-
 pub(super) async fn write_bytes<E>(
     path: &Path,
     display: &str,
@@ -159,7 +139,7 @@ mod tests {
         std::fs::write(&path, "before").unwrap();
         let mtime = std::fs::metadata(&path).unwrap().modified().ok();
 
-        write_text::<TestAtomicError>(&path, &path.display().to_string(), "after", None, mtime)
+        write_bytes::<TestAtomicError>(&path, &path.display().to_string(), b"after", None, mtime)
             .await
             .unwrap();
 
@@ -189,10 +169,10 @@ mod tests {
             let preserved = metadata.permissions();
             let mtime = metadata.modified().ok();
 
-            write_text::<TestAtomicError>(
+            write_bytes::<TestAtomicError>(
                 &path,
                 &path.display().to_string(),
-                "DATA",
+                b"DATA",
                 Some(preserved),
                 mtime,
             )
@@ -206,10 +186,10 @@ mod tests {
         #[cfg(not(unix))]
         {
             let metadata = std::fs::metadata(&path).unwrap();
-            write_text::<TestAtomicError>(
+            write_bytes::<TestAtomicError>(
                 &path,
                 &path.display().to_string(),
-                "DATA",
+                b"DATA",
                 Some(metadata.permissions()),
                 metadata.modified().ok(),
             )

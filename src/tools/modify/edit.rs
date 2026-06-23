@@ -1,6 +1,7 @@
 use super::{Modify, ModifyError};
 use crate::common::append_diff;
 use crate::constants;
+use crate::text_encoding::{decode_text, encode_text};
 use itertools::Itertools;
 use similar::{DiffOp, TextDiff};
 use std::path::Path;
@@ -254,6 +255,7 @@ pub(super) async fn edit_file(
     display: &str,
     edits: &[Replacement<'_>],
     dry_run: bool,
+    requested_encoding: Option<&'static encoding_rs::Encoding>,
 ) -> Result<String, ModifyError> {
     let metadata = tokio::fs::metadata(path)
         .await
@@ -272,12 +274,13 @@ pub(super) async fn edit_file(
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|source| Modify::map_io(source, display))?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)
+    let mut bytes = Vec::with_capacity(metadata.len().min(usize::MAX as u64) as usize);
+    file.read_to_end(&mut bytes)
         .await
         .map_err(|source| Modify::map_io(source, display))?;
+    let decoded = decode_text(&bytes, requested_encoding)?;
 
-    let (content, updated) = apply_edits_blocking(content, edits, display).await?;
+    let (content, updated) = apply_edits_blocking(decoded.text, edits, display).await?;
 
     if dry_run {
         let n = edits.len();
@@ -300,10 +303,11 @@ pub(super) async fn edit_file(
         .and_then(|m| m.modified().ok())
         == mtime_before;
 
-    let warning = super::atomic::write_text::<ModifyError>(
+    let updated_bytes = encode_text(&updated, decoded.encoding, decoded.bom)?;
+    let warning = super::atomic::write_bytes::<ModifyError>(
         path,
         display,
-        &updated,
+        &updated_bytes,
         Some(perms),
         mtime_before,
     )

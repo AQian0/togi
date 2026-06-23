@@ -206,8 +206,8 @@ pub(crate) fn build_display_lines(
         let wrapped = wrap_line(line, base_width);
         for wline in wrapped {
             if *align == Align::Right {
-                let effective_width = conv_width
-                    .saturating_sub(constants::USER_MARGIN as u16) as usize;
+                let effective_width =
+                    conv_width.saturating_sub(constants::USER_MARGIN as u16) as usize;
                 let re_wrapped = wrap_line(&wline, effective_width.max(1));
                 for rline in re_wrapped {
                     let dw: usize = spans_display_width(&rline.spans);
