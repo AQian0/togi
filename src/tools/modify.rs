@@ -3,8 +3,7 @@ use crate::common::{
 };
 use crate::error::{ErrorKind, TogiError};
 use crate::text_encoding::{TextEncodingError, encoding_from_label};
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::io::ErrorKind as IoErrorKind;
@@ -305,28 +304,55 @@ impl Tool for Modify {
     type Args = ModifyArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let parameters = schemars::schema_for!(ModifyArgs);
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Modify or write a file. `path` may be absolute or relative to the \
-                          injected `cwd` (relative paths are resolved \
-                          automatically). Three modes: pass `content` to create or completely \
-                          overwrite a text file (missing parent directories are created); \
-                          pass `content_base64` to write binary content; or edit an \
-                          existing file by passing `old_text` (and optional `new_text`) and/or an \
-                          `edits` array for multiple replacements. Each `old_text` must match \
-                          exactly once in the original file and the matches must not overlap. \
-                          `content`, `content_base64`, and the edit fields are mutually exclusive. \
-                          Text operations accept an optional `encoding` label such as `utf-8`, \
-                          `utf-16le`, `gbk`, `shift_jis`, or `windows-1252`; edits preserve \
-                          detected BOM encodings and explicit encodings. \
-                          Writes are atomic (temp file + rename), so a failed write never \
-                          corrupts the original. Use `dry_run: true` to preview changes \
-                          without modifying. On failure the tool returns a descriptive error \
-                          explaining how to fix the call."
-                .to_string(),
-            parameters: serde_json::to_value(parameters).unwrap(),
+    fn description(&self) -> String {
+        "Modify or write a file. `path` may be absolute or relative to the \
+         injected `cwd` (relative paths are resolved \
+         automatically). Three modes: pass `content` to create or completely \
+         overwrite a text file (missing parent directories are created); \
+         pass `content_base64` to write binary content; or edit an \
+         existing file by passing `old_text` (and optional `new_text`) and/or an \
+         `edits` array for multiple replacements. Each `old_text` must match \
+         exactly once in the original file and the matches must not overlap. \
+         `content`, `content_base64`, and the edit fields are mutually exclusive. \
+         Text operations accept an optional `encoding` label such as `utf-8`, \
+         `utf-16le`, `gbk`, `shift_jis`, or `windows-1252`; edits preserve \
+         detected BOM encodings and explicit encodings. \
+         Writes are atomic (temp file + rename), so a failed write never \
+         corrupts the original. Use `dry_run: true` to preview changes \
+         without modifying. On failure the tool returns a descriptive error \
+         explaining how to fix the call."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::to_value(schemars::schema_for!(ModifyArgs)).unwrap()
+    }
+
+    fn classify_error(&self, error: &Self::Error) -> ToolFailure {
+        match error {
+            ModifyError::NotFound { .. } => {
+                ToolFailure::not_found(error.to_string()).with_code("modify.not_found")
+            }
+            ModifyError::PermissionDenied { .. } => {
+                ToolFailure::permission_denied(error.to_string())
+                    .with_code("modify.permission_denied")
+            }
+            ModifyError::EmptyPath
+            | ModifyError::MissingCwd
+            | ModifyError::NoInstructions
+            | ModifyError::ConflictingInstructions
+            | ModifyError::ConflictingBase64
+            | ModifyError::InvalidBase64 { .. }
+            | ModifyError::EmptyOldText
+            | ModifyError::InvalidEncoding { .. }
+            | ModifyError::TextEncoding(_)
+            | ModifyError::FileTooLarge(_)
+            | ModifyError::NotAFile { .. }
+            | ModifyError::OldTextNotFound { .. }
+            | ModifyError::OldTextNotUnique { .. }
+            | ModifyError::OverlappingEdits { .. }
+            | ModifyError::NotUtf8 { .. } => ToolFailure::invalid_args(error.to_string()),
+            ModifyError::Io { .. } => ToolFailure::other(error.to_string()),
         }
     }
 

@@ -4,8 +4,7 @@ use crate::common::{
 use crate::constants;
 use crate::error::{ErrorKind, TogiError};
 use crate::text_encoding::{decode_text, encoding_from_label, is_binary_output_encoding};
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -158,26 +157,43 @@ impl Tool for Read {
     type Args = ReadArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let parameters = schemars::schema_for!(ReadArgs);
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Read the contents of a file. Supports text files (returned with line \
-                          numbers) and binary files (returned as a hexdump preview or base64). \
-                          `path` may be absolute or relative to the injected `cwd`. For binary \
-                          files the output includes file size and a hexdump of the first 512 \
-                          bytes by default; pass `encoding: \"base64\"` to get the full \
-                          base64-encoded content instead. For text files, `encoding` may be a \
-                          label such as `utf-8`, `utf-16le`, `gbk`, `shift_jis`, or \
-                          `windows-1252`; when omitted, UTF-8 is assumed unless the file has a \
-                          UTF-8/UTF-16 BOM. For large text files (>10 MB) only the first 50 KB \
-                          are returned by default; use `offset_bytes` and `limit_bytes` to read \
-                          specific portions. Files larger than 100 MB are rejected — use the \
-                          `shell` tool with commands like `head`, `tail`, or `sed` for those. \
-                          On failure the tool returns a descriptive error explaining how to fix \
-                          the call."
-                .to_string(),
-            parameters: serde_json::to_value(parameters).unwrap(),
+    fn description(&self) -> String {
+        "Read the contents of a file. Supports text files (returned with line \
+         numbers) and binary files (returned as a hexdump preview or base64). \
+         `path` may be absolute or relative to the injected `cwd`. For binary \
+         files the output includes file size and a hexdump of the first 512 \
+         bytes by default; pass `encoding: \"base64\"` to get the full \
+         base64-encoded content instead. For text files, `encoding` may be a \
+         label such as `utf-8`, `utf-16le`, `gbk`, `shift_jis`, or \
+         `windows-1252`; when omitted, UTF-8 is assumed unless the file has a \
+         UTF-8/UTF-16 BOM. For large text files (>10 MB) only the first 50 KB \
+         are returned by default; use `offset_bytes` and `limit_bytes` to read \
+         specific portions. Files larger than 100 MB are rejected — use the \
+         `shell` tool with commands like `head`, `tail`, or `sed` for those. \
+         On failure the tool returns a descriptive error explaining how to fix \
+         the call."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::to_value(schemars::schema_for!(ReadArgs)).unwrap()
+    }
+
+    fn classify_error(&self, error: &Self::Error) -> ToolFailure {
+        match error {
+            ReadError::NotFound { .. } => {
+                ToolFailure::not_found(error.to_string()).with_code("read.not_found")
+            }
+            ReadError::PermissionDenied { .. } => {
+                ToolFailure::permission_denied(error.to_string())
+                    .with_code("read.permission_denied")
+            }
+            ReadError::EmptyPath
+            | ReadError::MissingCwd
+            | ReadError::FileTooLarge(_)
+            | ReadError::InvalidEncoding { .. }
+            | ReadError::NotAFile { .. } => ToolFailure::invalid_args(error.to_string()),
+            ReadError::Io { .. } => ToolFailure::other(error.to_string()),
         }
     }
 

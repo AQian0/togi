@@ -1,7 +1,6 @@
 use crate::constants;
 use crate::error::{ErrorKind, TogiError};
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -214,18 +213,33 @@ impl Tool for Shell {
     type Args = ShellArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let parameters = schemars::schema_for!(ShellArgs);
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Execute a shell command in the injected `cwd`. The command \
-                          runs through the system shell (`sh -c` on Unix, `cmd /C` on Windows), so \
-                          pipes, redirects and globbing work. The result reports the exit code \
-                          along with captured stdout and stderr. Use the optional `timeout_secs` \
-                          (default 60, max 600) to bound long-running commands. On failure the \
-                          tool returns a descriptive error explaining how to fix the call."
-                .to_string(),
-            parameters: serde_json::to_value(parameters).unwrap(),
+    fn description(&self) -> String {
+        "Execute a shell command in the injected `cwd`. The command \
+         runs through the system shell (`sh -c` on Unix, `cmd /C` on Windows), so \
+         pipes, redirects and globbing work. The result reports the exit code \
+         along with captured stdout and stderr. Use the optional `timeout_secs` \
+         (default 60, max 600) to bound long-running commands. On failure the \
+         tool returns a descriptive error explaining how to fix the call."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::to_value(schemars::schema_for!(ShellArgs)).unwrap()
+    }
+
+    fn classify_error(&self, error: &Self::Error) -> ToolFailure {
+        match error {
+            ShellError::Timeout { secs: _ } => {
+                ToolFailure::timeout(error.to_string()).with_code("shell.timeout")
+            }
+            ShellError::EmptyCommand
+            | ShellError::MissingCwd
+            | ShellError::BadWorkingDir { .. } => {
+                ToolFailure::invalid_args(error.to_string())
+            }
+            ShellError::Spawn { .. } | ShellError::Io { .. } => {
+                ToolFailure::other(error.to_string())
+            }
         }
     }
 

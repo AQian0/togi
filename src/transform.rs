@@ -29,12 +29,19 @@ pub fn to_output(
             AgentSection::Answer => SectionKind::Answer,
         }),
         AgentEvent::Text(text) => OutputItem::Chunk(text),
-        AgentEvent::ToolCall { name, arguments } => {
+        AgentEvent::ToolCall {
+            name,
+            arguments,
+            internal_call_id: _,
+        } => {
             let summary = crate::ui::summarize::summarize_call(&name, &arguments);
             *pending_effect = Some(registry.classify(&name, &arguments));
             OutputItem::ToolCall { name, summary }
         }
-        AgentEvent::ToolResult(text) => {
+        AgentEvent::ToolResult {
+            text,
+            internal_call_id: _,
+        } => {
             match pending_effect.take().unwrap_or(ToolEffect::Mutating) {
                 // 只读 / 查询：仅展示行为与简短摘要，不在对话区铺开具体内容。
                 ToolEffect::ReadOnly => {

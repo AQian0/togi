@@ -1,6 +1,5 @@
 use crate::common::parse_args_object;
 use crate::tool_pipeline::ApplyLayer;
-use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::{Map, Value};
@@ -37,12 +36,14 @@ impl ToolDyn for InjectedTool {
     fn name(&self) -> String {
         self.inner.name()
     }
-    fn definition<'a>(&'a self, prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            let mut definition = self.inner.definition(prompt).await;
-            hide_injected_params(&mut definition.parameters, &self.params);
-            definition
-        })
+    fn description(&self) -> String {
+        self.inner.description()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        let mut parameters = self.inner.parameters();
+        hide_injected_params(&mut parameters, &self.params);
+        parameters
     }
     fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
@@ -77,7 +78,6 @@ fn hide_injected_params(parameters: &mut Value, params: &Map<String, Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rig::completion::ToolDefinition;
     use rig::tool::Tool;
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
@@ -98,12 +98,12 @@ mod tests {
         type Error = EchoError;
         type Args = EchoArgs;
         type Output = EchoArgs;
-        async fn definition(&self, _prompt: String) -> ToolDefinition {
-            ToolDefinition {
-                name: Self::NAME.to_string(),
-                description: "Echo arguments".to_string(),
-                parameters: serde_json::to_value(schemars::schema_for!(EchoArgs)).unwrap(),
-            }
+        fn description(&self) -> String {
+            "Echo arguments".to_string()
+        }
+
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::to_value(schemars::schema_for!(EchoArgs)).unwrap()
         }
         async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
             Ok(args)
@@ -165,7 +165,7 @@ mod tests {
     #[tokio::test]
     async fn definition_hides_all_injected_params() {
         let tool = inject(test_injection(), Echo);
-        let definition = tool.definition(String::new()).await;
+        let definition = rig::tool::tool_definition(&*tool);
         let properties = definition.parameters["properties"].as_object().unwrap();
         let required = definition.parameters["required"].as_array().unwrap();
         assert!(!properties.contains_key("cwd"));

@@ -35,7 +35,7 @@ async fn read_receives_injected_cwd() {
 #[tokio::test]
 async fn read_schema_does_not_expose_cwd_argument() {
     let tool = make_tool(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    let definition = tool.definition(String::new()).await;
+    let definition = rig::tool::tool_definition(&*tool);
     let properties = definition.parameters["properties"].as_object().unwrap();
     assert!(properties.contains_key("path"));
     assert!(!properties.contains_key("cwd"));
@@ -44,7 +44,7 @@ async fn read_schema_does_not_expose_cwd_argument() {
 #[tokio::test]
 async fn read_schema_exposes_encoding() {
     let tool = make_tool(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    let definition = tool.definition(String::new()).await;
+    let definition = rig::tool::tool_definition(&*tool);
     let properties = definition.parameters["properties"].as_object().unwrap();
     assert!(properties.contains_key("encoding"));
 }
@@ -52,7 +52,7 @@ async fn read_schema_exposes_encoding() {
 #[tokio::test]
 async fn read_schema_exposes_offset_and_limit_bytes() {
     let tool = make_tool(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    let definition = tool.definition(String::new()).await;
+    let definition = rig::tool::tool_definition(&*tool);
     let properties = definition.parameters["properties"].as_object().unwrap();
     assert!(properties.contains_key("offset_bytes"));
     assert!(properties.contains_key("limit_bytes"));

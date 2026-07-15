@@ -52,7 +52,7 @@ async fn shell_times_out_long_commands() {
 
 #[tokio::test]
 async fn shell_schema_hides_injected_params() {
-    let definition = tool().definition(String::new()).await;
+    let definition = rig::tool::tool_definition(&*tool());
     let properties = definition.parameters["properties"].as_object().unwrap();
     assert!(properties.contains_key("command"));
     assert!(properties.contains_key("timeout_secs"));

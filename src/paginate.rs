@@ -1,7 +1,6 @@
 use crate::common::parse_args_object;
 use crate::tool_pipeline::ApplyLayer;
 use itertools::Itertools;
-use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use schemars::JsonSchema;
@@ -24,12 +23,14 @@ impl ToolDyn for PaginatedTool {
     fn name(&self) -> String {
         self.inner.name()
     }
-    fn definition<'a>(&'a self, prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            let mut definition = self.inner.definition(prompt).await;
-            add_pagination_params(&mut definition.parameters);
-            definition
-        })
+    fn description(&self) -> String {
+        self.inner.description()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        let mut parameters = self.inner.parameters();
+        add_pagination_params(&mut parameters);
+        parameters
     }
     fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
@@ -236,14 +237,12 @@ mod tests {
         fn name(&self) -> String {
             "raw_echo".to_string()
         }
-        fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
-            Box::pin(async {
-                ToolDefinition {
-                    name: "raw_echo".to_string(),
-                    description: "echo".to_string(),
-                    parameters: serde_json::to_value(schemars::schema_for!(RawEchoArgs)).unwrap(),
-                }
-            })
+        fn description(&self) -> String {
+            "echo".to_string()
+        }
+
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::to_value(schemars::schema_for!(RawEchoArgs)).unwrap()
         }
         fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
             Box::pin(async move { Ok(args) })
@@ -256,15 +255,12 @@ mod tests {
         fn name(&self) -> String {
             "fixed_lines".to_string()
         }
-        fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
-            Box::pin(async {
-                ToolDefinition {
-                    name: "fixed_lines".to_string(),
-                    description: "fixed".to_string(),
-                    parameters: serde_json::to_value(schemars::schema_for!(FixedLinesArgs))
-                        .unwrap(),
-                }
-            })
+        fn description(&self) -> String {
+            "fixed".to_string()
+        }
+
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::to_value(schemars::schema_for!(FixedLinesArgs)).unwrap()
         }
         fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
             Box::pin(async { Ok("l1\nl2\nl3\nl4\nl5\n".to_string()) })
@@ -273,7 +269,7 @@ mod tests {
     #[tokio::test]
     async fn definition_adds_offset_and_limit_params() {
         let tool = paginate(0, RawEcho);
-        let definition = tool.definition(String::new()).await;
+        let definition = rig::tool::tool_definition(&*tool);
         let properties = definition.parameters["properties"].as_object().unwrap();
         assert!(properties.contains_key("text"));
         assert!(properties.contains_key("offset"));

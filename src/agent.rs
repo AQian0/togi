@@ -6,7 +6,7 @@ use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::CompletionModel;
 use rig::completion::message::ToolResultContent;
 use rig::message::Message;
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat};
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use rig::tool::ToolDyn;
 use std::future::Future;
 use std::pin::Pin;
@@ -99,8 +99,16 @@ pub enum AgentEvent {
     ToolCall {
         name: String,
         arguments: serde_json::Value,
+        /// Rig-generated unique identifier for this tool call, correlating
+        /// the call with its result and deltas.
+        internal_call_id: String,
     },
-    ToolResult(String),
+    ToolResult {
+        text: String,
+        /// Rig-generated unique identifier matching the originating
+        /// `ToolCall::internal_call_id`.
+        internal_call_id: String,
+    },
     Notice(String),
 }
 
@@ -132,8 +140,9 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
     let mut section = AgentSection::Answer;
     let mut final_history: Option<Vec<Message>> = None;
     let stream_request = agent
-        .stream_chat(input, history.to_vec())
-        .multi_turn(max_multi_turn as usize);
+        .stream_prompt(input)
+        .history(history.to_vec())
+        .max_turns(max_multi_turn as usize);
     let mut stream = tokio::select! {
         biased;
         _ = cancel_rx.changed() => return Ok(cancel_return(&tx, history)),
@@ -159,17 +168,26 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                     ensure_section(&mut section, AgentSection::Answer, &tx);
                     let _ = tx.send(AgentEvent::Text(text.text));
                 }
-                StreamedAssistantContent::ToolCall { tool_call, .. } => {
+                StreamedAssistantContent::ToolCall {
+                    tool_call,
+                    internal_call_id,
+                } => {
                     let _ = tx.send(AgentEvent::ToolCall {
                         name: tool_call.function.name,
                         arguments: tool_call.function.arguments,
+                        internal_call_id,
                     });
+                }
+                StreamedAssistantContent::Unknown(value) => {
+                    let _ = tx.send(AgentEvent::Notice(format!(
+                        "received unhandled provider output: {value}"
+                    )));
                 }
                 _ => {}
             },
             Some(Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                 tool_result,
-                ..
+                internal_call_id,
             }))) => {
                 let text: String = tool_result
                     .content
@@ -179,10 +197,13 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                         _ => None,
                     })
                     .join("\n");
-                let _ = tx.send(AgentEvent::ToolResult(text));
+                let _ = tx.send(AgentEvent::ToolResult {
+                    text,
+                    internal_call_id,
+                });
             }
             Some(Ok(MultiTurnStreamItem::FinalResponse(final_response))) => {
-                if let Some(updated) = final_response.history() {
+                if let Some(updated) = final_response.messages() {
                     final_history = Some(updated.to_vec());
                 }
             }
