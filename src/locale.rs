@@ -168,15 +168,16 @@ pub fn tr(key: &str) -> String {
     tr_args(key, &FluentArgs::new())
 }
 
-/// 获取带参数翻译。缺失 key 或 pattern 会触发 panic。
+/// 获取带参数翻译。缺失 key 或 pattern 时返回 `⚠key` 格式的占位字符串，
+/// 不会触发 panic。
 pub fn tr_args(key: &str, args: &FluentArgs<'_>) -> String {
     let bundle = make_bundle();
-    let msg = bundle
-        .get_message(key)
-        .unwrap_or_else(|| panic!("missing translation key: {key}"));
-    let pattern = msg
-        .value()
-        .unwrap_or_else(|| panic!("missing value for key: {key}"));
+    let Some(msg) = bundle.get_message(key) else {
+        return format!("⚠{key}");
+    };
+    let Some(pattern) = msg.value() else {
+        return format!("⚠{key}");
+    };
     let mut errors = vec![];
     bundle
         .format_pattern(pattern, Some(args), &mut errors)
