@@ -3,10 +3,6 @@ use togi::tools::modify::{Modify, ModifyArgs};
 const LARGE_FILE_THRESHOLD: u64 = 10 * 1024 * 1024;
 const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
 
-fn tool() -> Box<dyn rig::tool::ToolDyn> {
-    crate::support::inject_cwd(std::env::temp_dir(), Modify)
-}
-
 #[test]
 fn modify_args_schema_should_expose_public_fields_and_hide_injected_cwd() {
     let schema = serde_json::to_value(schemars::schema_for!(ModifyArgs)).unwrap();
@@ -25,120 +21,112 @@ fn modify_args_schema_should_expose_public_fields_and_hide_injected_cwd() {
 
 #[tokio::test]
 async fn call_should_create_text_file_when_content_is_provided() {
-    let path = crate::support::temp_path("modify-create.txt");
-    crate::support::remove_file(&path);
-    let tool = tool();
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("create.txt");
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "content": "hello world\n",
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("created"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world\n");
-    crate::support::remove_file(&path);
+}
+
+#[tokio::test]
+async fn call_should_overwrite_existing_text_file() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("overwrite.txt");
+    std::fs::write(&path, "old").unwrap();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "content": "new",
+    });
+
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("overwrote"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+}
+
+#[tokio::test]
+async fn call_should_report_no_changes_when_overwriting_with_same_content() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("same.txt");
+    std::fs::write(&path, "same\n").unwrap();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "content": "same\n",
+    });
+
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("overwrote"));
+    assert!(output.contains("(no changes)"));
+    assert!(!output.contains("@@"));
 }
 
 #[tokio::test]
 async fn call_should_include_diff_when_editing_text_file() {
-    let path = crate::support::temp_path("modify-diff-edit.txt");
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("diff-edit.txt");
     std::fs::write(&path, "a\nb\nc\n").unwrap();
-    let tool = tool();
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "old_text": "b",
         "new_text": "B",
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("edited"));
     assert!(output.contains("@@"));
     assert!(output.contains("-b\n"));
     assert!(output.contains("+B\n"));
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn call_should_include_diff_when_creating_text_file() {
-    let path = crate::support::temp_path("modify-diff-create.txt");
-    crate::support::remove_file(&path);
-    let tool = tool();
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("diff-create.txt");
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "content": "hello\nworld\n",
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("created"));
     assert!(output.contains("--- /dev/null"));
     assert!(output.contains("@@ -0,0 +1,2 @@"));
     assert!(output.contains("+hello\n"));
     assert!(output.contains("+world\n"));
-    crate::support::remove_file(&path);
-}
-
-#[tokio::test]
-async fn call_should_report_no_changes_when_overwriting_with_same_content() {
-    let path = crate::support::temp_path("modify-diff-same.txt");
-    std::fs::write(&path, "same\n").unwrap();
-    let tool = tool();
-    let args = serde_json::json!({
-        "path": path.display().to_string(),
-        "content": "same\n",
-    });
-
-    let output = tool.call(args.to_string()).await.unwrap();
-
-    assert!(output.contains("overwrote"));
-    assert!(output.contains("(no changes)"));
-    assert!(!output.contains("@@"));
-    crate::support::remove_file(&path);
-}
-
-#[tokio::test]
-async fn call_should_overwrite_existing_text_file() {
-    let path = crate::support::temp_path("modify-overwrite.txt");
-    std::fs::write(&path, "old").unwrap();
-    let tool = tool();
-    let args = serde_json::json!({
-        "path": path.display().to_string(),
-        "content": "new",
-    });
-
-    let output = tool.call(args.to_string()).await.unwrap();
-
-    assert!(output.contains("overwrote"));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn call_should_apply_single_unique_replacement() {
-    let path = crate::support::temp_path("modify-edit.txt");
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("edit.txt");
     std::fs::write(&path, "alpha beta gamma").unwrap();
-    let tool = tool();
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "old_text": "beta",
         "new_text": "BETA",
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("edited"));
     assert!(output.contains("1 replacement"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha BETA gamma");
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn call_should_combine_edits_array_with_single_old_text() {
-    let path = crate::support::temp_path("modify-combine.txt");
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("combine.txt");
     std::fs::write(&path, "one two three").unwrap();
-    let tool = tool();
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "edits": [{"old_text": "one", "new_text": "1"}],
@@ -146,176 +134,33 @@ async fn call_should_combine_edits_array_with_single_old_text() {
         "new_text": "3",
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("2 replacements"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "1 two 3");
-    crate::support::remove_file(&path);
-}
-
-#[tokio::test]
-async fn call_should_edit_utf16le_bom_file_preserving_encoding() {
-    let path = crate::support::temp_path("modify-utf16le.txt");
-    let mut bytes = vec![0xFF, 0xFE];
-    for unit in "hello 世界".encode_utf16() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
-    }
-    std::fs::write(&path, bytes).unwrap();
-    let tool = tool();
-    let args = serde_json::json!({
-        "path": path.display().to_string(),
-        "old_text": "世界",
-        "new_text": "Rust",
-    });
-
-    let output = tool.call(args.to_string()).await.unwrap();
-
-    assert!(output.contains("edited"));
-    let written = std::fs::read(&path).unwrap();
-    assert_eq!(&written[..2], &[0xFF, 0xFE]);
-    let (decoded, had_errors) = encoding_rs::UTF_16LE.decode_without_bom_handling(&written[2..]);
-    assert!(!had_errors);
-    assert_eq!(decoded, "hello Rust");
-    crate::support::remove_file(&path);
-}
-
-#[tokio::test]
-async fn call_should_edit_gbk_file_with_explicit_encoding() {
-    let path = crate::support::temp_path("modify-gbk.txt");
-    let (bytes, _, had_errors) = encoding_rs::GBK.encode("中文 beta");
-    assert!(!had_errors);
-    std::fs::write(&path, &bytes).unwrap();
-    let tool = tool();
-    let args = serde_json::json!({
-        "path": path.display().to_string(),
-        "old_text": "beta",
-        "new_text": "版本",
-        "encoding": "gbk",
-    });
-
-    let output = tool.call(args.to_string()).await.unwrap();
-
-    assert!(output.contains("edited"));
-    let written = std::fs::read(&path).unwrap();
-    let (decoded, _, had_errors) = encoding_rs::GBK.decode(&written);
-    assert!(!had_errors);
-    assert_eq!(decoded, "中文 版本");
-    crate::support::remove_file(&path);
-}
-
-#[tokio::test]
-async fn call_should_write_text_file_with_explicit_encoding() {
-    let path = crate::support::temp_path("modify-write-gbk.txt");
-    crate::support::remove_file(&path);
-    let tool = tool();
-    let args = serde_json::json!({
-        "path": path.display().to_string(),
-        "content": "中文",
-        "encoding": "gbk",
-    });
-
-    let output = tool.call(args.to_string()).await.unwrap();
-
-    assert!(output.contains("created"));
-    let written = std::fs::read(&path).unwrap();
-    let (decoded, _, had_errors) = encoding_rs::GBK.decode(&written);
-    assert!(!had_errors);
-    assert_eq!(decoded, "中文");
-    crate::support::remove_file(&path);
-}
-
-#[tokio::test]
-async fn call_should_reject_conflicting_content_and_edit_instructions() {
-    let path = crate::support::temp_path("modify-conflict.txt");
-    std::fs::write(&path, "data").unwrap();
-    let tool = tool();
-    let args = serde_json::json!({
-        "path": path.display().to_string(),
-        "content": "whole new body",
-        "old_text": "data",
-    });
-
-    let result = tool.call(args.to_string()).await;
-
-    assert!(result.is_err());
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "data");
-    crate::support::remove_file(&path);
-}
-
-#[tokio::test]
-async fn call_should_require_write_or_edit_instructions() {
-    let path = crate::support::temp_path("modify-noop.txt");
-    std::fs::write(&path, "content").unwrap();
-    let tool = tool();
-    let args = serde_json::json!({ "path": path.display().to_string() });
-
-    let result = tool.call(args.to_string()).await;
-
-    assert!(result.is_err());
-    crate::support::remove_file(&path);
-}
-
-#[tokio::test]
-async fn call_should_not_write_when_text_create_is_dry_run() {
-    let path = crate::support::temp_path("modify-dry-run.txt");
-    crate::support::remove_file(&path);
-    let tool = tool();
-    let args = serde_json::json!({
-        "path": path.display().to_string(),
-        "content": "hello world\n",
-        "dry_run": true,
-    });
-
-    let output = tool.call(args.to_string()).await.unwrap();
-
-    assert!(output.contains("[dry run]"));
-    assert!(output.contains("would create"));
-    assert!(!path.exists());
-}
-
-#[tokio::test]
-async fn call_should_show_edit_diff_without_writing_when_dry_run() {
-    let path = crate::support::temp_path("modify-dry-run-edit.txt");
-    std::fs::write(&path, "before").unwrap();
-    let tool = tool();
-    let args = serde_json::json!({
-        "path": path.display().to_string(),
-        "old_text": "before",
-        "new_text": "after",
-        "dry_run": true,
-    });
-
-    let output = tool.call(args.to_string()).await.unwrap();
-
-    assert!(output.contains("[dry run]"));
-    assert!(output.contains("-before"));
-    assert!(output.contains("+after"));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "before");
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn call_should_report_deletion_when_new_text_is_omitted() {
-    let path = crate::support::temp_path("modify-delete.txt");
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("delete.txt");
     std::fs::write(&path, "keep remove keep").unwrap();
-    let tool = tool();
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "old_text": "remove ",
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("1 deletion"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep keep");
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn call_should_report_mixed_replacements_and_deletions() {
-    let path = crate::support::temp_path("modify-mixed.txt");
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("mixed.txt");
     std::fs::write(&path, "apple banana cherry").unwrap();
-    let tool = tool();
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "edits": [
@@ -324,48 +169,177 @@ async fn call_should_report_mixed_replacements_and_deletions() {
         ],
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("1 replacement"));
     assert!(output.contains("1 deletion"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "Apfel banana ");
-    crate::support::remove_file(&path);
+}
+
+#[tokio::test]
+async fn call_should_edit_utf16le_bom_file_preserving_encoding() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("utf16le.txt");
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in "hello 世界".encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    std::fs::write(&path, bytes).unwrap();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "old_text": "世界",
+        "new_text": "Rust",
+    });
+
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("edited"));
+    let written = std::fs::read(&path).unwrap();
+    assert_eq!(&written[..2], &[0xFF, 0xFE]);
+    let (decoded, had_errors) = encoding_rs::UTF_16LE.decode_without_bom_handling(&written[2..]);
+    assert!(!had_errors);
+    assert_eq!(decoded, "hello Rust");
+}
+
+#[tokio::test]
+async fn call_should_edit_gbk_file_with_explicit_encoding() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("gbk.txt");
+    let (bytes, _, had_errors) = encoding_rs::GBK.encode("中文 beta");
+    assert!(!had_errors);
+    std::fs::write(&path, &bytes).unwrap();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "old_text": "beta",
+        "new_text": "版本",
+        "encoding": "gbk",
+    });
+
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("edited"));
+    let written = std::fs::read(&path).unwrap();
+    let (decoded, _, had_errors) = encoding_rs::GBK.decode(&written);
+    assert!(!had_errors);
+    assert_eq!(decoded, "中文 版本");
+}
+
+#[tokio::test]
+async fn call_should_write_text_file_with_explicit_encoding() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("write-gbk.txt");
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "content": "中文",
+        "encoding": "gbk",
+    });
+
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("created"));
+    let written = std::fs::read(&path).unwrap();
+    let (decoded, _, had_errors) = encoding_rs::GBK.decode(&written);
+    assert!(!had_errors);
+    assert_eq!(decoded, "中文");
+}
+
+#[tokio::test]
+async fn call_should_reject_conflicting_content_and_edit_instructions() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("conflict.txt");
+    std::fs::write(&path, "data").unwrap();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "content": "whole new body",
+        "old_text": "data",
+    });
+
+    let result = ctx.tool.call(args.to_string()).await;
+
+    assert!(result.is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "data");
+}
+
+#[tokio::test]
+async fn call_should_require_write_or_edit_instructions() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("noop.txt");
+    std::fs::write(&path, "content").unwrap();
+    let args = serde_json::json!({ "path": path.display().to_string() });
+
+    let result = ctx.tool.call(args.to_string()).await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn call_should_not_write_when_text_create_is_dry_run() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("dry-run.txt");
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "content": "hello world\n",
+        "dry_run": true,
+    });
+
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("[dry run]"));
+    assert!(output.contains("would create"));
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn call_should_show_edit_diff_without_writing_when_dry_run() {
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("dry-run-edit.txt");
+    std::fs::write(&path, "before").unwrap();
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "old_text": "before",
+        "new_text": "after",
+        "dry_run": true,
+    });
+
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
+
+    assert!(output.contains("[dry run]"));
+    assert!(output.contains("-before"));
+    assert!(output.contains("+after"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "before");
 }
 
 #[tokio::test]
 async fn call_should_create_binary_file_when_content_base64_is_provided() {
     use base64::Engine;
 
-    let path = crate::support::temp_path("modify-base64-create.bin");
-    crate::support::remove_file(&path);
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("base64-create.bin");
     let data = b"\x00\x89PNG\r\n\x1a\n";
     let b64 = base64::engine::general_purpose::STANDARD.encode(data);
-    let tool = tool();
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "content_base64": b64,
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("created"));
     assert!(output.contains("(binary — no diff available)"));
     assert_eq!(std::fs::read(&path).unwrap(), data);
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn call_should_reject_content_base64_with_text_content() {
-    let path = crate::support::temp_path("modify-base64-conflict.bin");
-    crate::support::remove_file(&path);
-    let tool = tool();
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("base64-conflict.bin");
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "content_base64": "AAAA",
         "content": "text",
     });
 
-    let result = tool.call(args.to_string()).await;
+    let result = ctx.tool.call(args.to_string()).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -374,15 +348,14 @@ async fn call_should_reject_content_base64_with_text_content() {
 
 #[tokio::test]
 async fn call_should_reject_invalid_content_base64() {
-    let path = crate::support::temp_path("modify-base64-bad.bin");
-    crate::support::remove_file(&path);
-    let tool = tool();
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("base64-bad.bin");
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "content_base64": "not-valid!!!",
     });
 
-    let result = tool.call(args.to_string()).await;
+    let result = ctx.tool.call(args.to_string()).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -393,17 +366,16 @@ async fn call_should_reject_invalid_content_base64() {
 async fn call_should_not_write_binary_file_when_dry_run() {
     use base64::Engine;
 
-    let path = crate::support::temp_path("modify-base64-dry.bin");
-    crate::support::remove_file(&path);
+    let ctx = crate::support::TestContext::new(Modify);
+    let path = ctx.join("base64-dry.bin");
     let b64 = base64::engine::general_purpose::STANDARD.encode(b"binary");
-    let tool = tool();
     let args = serde_json::json!({
         "path": path.display().to_string(),
         "content_base64": b64,
         "dry_run": true,
     });
 
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("[dry run]"));
     assert!(output.contains("would create"));

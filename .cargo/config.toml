@@ -1,0 +1,10 @@
+[alias]
+test-fast = "test"
+test-all = "test -- --include-ignored"
+test-unit = "test --lib"
+test-integration = "test --test integration"
+test-e2e = "test --test e2e"
+test-verbose = "test -- --nocapture"
+test-continue = "test -- --no-fail-fast"
+test-ignored = "test -- --ignored"
+test-backtrace = "test -- --nocapture"

@@ -12,6 +12,11 @@ path = "tests/e2e.rs"
 name = "integration"
 path = "tests/integration.rs"
 
+[dev-dependencies]
+pretty_assertions = "1.4"
+rstest = "0.26"
+tempfile = "3.22"
+
 [dependencies]
 arboard = "3.6.1"
 base64 = "0.22.1"

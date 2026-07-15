@@ -60,105 +60,87 @@ async fn read_schema_exposes_offset_and_limit_bytes() {
 
 #[tokio::test]
 async fn read_binary_returns_hexdump() {
-    let dir = std::env::temp_dir();
-    let path = crate::support::temp_path("read-bin.bin");
+    let ctx = crate::support::TestContext::new(Read);
+    let path = ctx.join("bin.bin");
     std::fs::write(&path, b"\x00\x01\x02Hello PNG\x89PNG").unwrap();
 
-    let tool = make_tool(&dir);
     let args = serde_json::json!({"path": path.display().to_string()});
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
     assert!(output.contains("(binary)"));
     assert!(output.contains("00000000"));
     assert!(
         !output.contains("1 | "),
         "text line numbers should not appear"
     );
-
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn read_binary_hex_respects_offset() {
-    let dir = std::env::temp_dir();
-    let path = crate::support::temp_path("read-bin-offset.bin");
+    let ctx = crate::support::TestContext::new(Read);
+    let path = ctx.join("bin-offset.bin");
     std::fs::write(&path, b"\x00\x01ABCDEFG").unwrap();
 
-    let tool = make_tool(&dir);
     let args = serde_json::json!({"path": path.display().to_string(), "offset_bytes": 2});
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
     assert!(output.contains("from byte 2"));
     assert!(output.contains("00000002"));
     assert!(
         output.contains("41 42 43"),
         "expected hex from offset, got: {output}"
     );
-
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn read_binary_base64_encoding() {
-    let dir = std::env::temp_dir();
-    let path = crate::support::temp_path("read-b64.bin");
+    let ctx = crate::support::TestContext::new(Read);
+    let path = ctx.join("b64.bin");
     std::fs::write(&path, b"\x00binary").unwrap();
 
-    let tool = make_tool(&dir);
     let args = serde_json::json!({"path": path.display().to_string(), "encoding": "base64"});
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
     assert!(output.contains("(binary)"));
     assert!(output.contains("base64"));
     assert!(output.contains("AGJpbmFyeQ=="));
-
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn read_utf16le_bom_text_file() {
-    let dir = std::env::temp_dir();
-    let path = crate::support::temp_path("read-utf16le.txt");
+    let ctx = crate::support::TestContext::new(Read);
+    let path = ctx.join("utf16le.txt");
     let mut bytes = vec![0xFF, 0xFE];
     for unit in "hello 世界\n".encode_utf16() {
         bytes.extend_from_slice(&unit.to_le_bytes());
     }
     std::fs::write(&path, bytes).unwrap();
 
-    let tool = make_tool(&dir);
     let args = serde_json::json!({"path": path.display().to_string()});
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
     assert!(output.contains("1 | hello 世界"), "got: {output}");
-
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn read_gbk_text_file_with_explicit_encoding() {
-    let dir = std::env::temp_dir();
-    let path = crate::support::temp_path("read-gbk.txt");
+    let ctx = crate::support::TestContext::new(Read);
+    let path = ctx.join("gbk.txt");
     let (bytes, _, had_errors) = encoding_rs::GBK.encode("中文\n");
     assert!(!had_errors);
     std::fs::write(&path, &bytes).unwrap();
 
-    let tool = make_tool(&dir);
     let args = serde_json::json!({"path": path.display().to_string(), "encoding": "gbk"});
-    let output = tool.call(args.to_string()).await.unwrap();
+    let output = ctx.tool.call(args.to_string()).await.unwrap();
     assert!(output.contains("1 | 中文"), "got: {output}");
-
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
 async fn read_rejects_invalid_encoding() {
-    let dir = std::env::temp_dir();
-    let path = crate::support::temp_path("read-badenc.bin");
+    let ctx = crate::support::TestContext::new(Read);
+    let path = ctx.join("badenc.bin");
     std::fs::write(&path, b"\x00\xff").unwrap();
 
-    let tool = make_tool(&dir);
     let args = serde_json::json!({"path": path.display().to_string(), "encoding": "gzip"});
-    let result = tool.call(args.to_string()).await;
+    let result = ctx.tool.call(args.to_string()).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("encoding"));
-
-    crate::support::remove_file(&path);
 }
 
 #[tokio::test]
@@ -190,7 +172,11 @@ async fn read_large_file_offset_bytes() {
     write_sparse_large_text_file(&path);
 
     let tool = make_tool(&dir);
-    let args = serde_json::json!({"path": path.display().to_string(), "offset_bytes": 1000000, "limit_bytes": 4096});
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "offset_bytes": 1_000_000,
+        "limit_bytes": 4096,
+    });
     let output = tool.call(args.to_string()).await.unwrap();
 
     assert!(
@@ -198,7 +184,11 @@ async fn read_large_file_offset_bytes() {
         "offset_bytes not reflected in output: {output}"
     );
 
-    let args = serde_json::json!({"path": path.display().to_string(), "offset_bytes": 999999999999u64, "limit_bytes": 4096});
+    let args = serde_json::json!({
+        "path": path.display().to_string(),
+        "offset_bytes": 999999999999u64,
+        "limit_bytes": 4096,
+    });
     let output = tool.call(args.to_string()).await.unwrap();
     assert!(
         output.contains("byte 999999999999") && output.contains("(empty file)"),
