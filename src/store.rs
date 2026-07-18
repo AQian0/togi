@@ -134,7 +134,9 @@ impl HistoryStore {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                title TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,30 +151,7 @@ impl HistoryStore {
         .await
         .map_err(|source| StoreError::Query { source })?;
 
-        // 迁移：为 sessions 表补充多会话所需的列。
-        Self::migrate(&conn).await?;
-
         Ok(Self { conn, path })
-    }
-
-    /// 执行 schema 迁移：为旧版数据库补充缺失的列。
-    async fn migrate(conn: &turso::Connection) -> Result<(), StoreError> {
-        let migrations = [
-            "ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
-        ];
-        for sql in migrations {
-            // 列已存在时 ALTER TABLE 会报错，忽略即可。
-            let _ = conn.execute_batch(sql).await;
-        }
-        // 为旧数据填充默认值。
-        conn.execute_batch(
-            "UPDATE sessions SET title = id WHERE title = '';
-             UPDATE sessions SET updated_at = created_at WHERE updated_at = '';",
-        )
-        .await
-        .map_err(|source| StoreError::Query { source })?;
-        Ok(())
     }
 
     /// 返回底层数据库文件路径（用于诊断日志）。
