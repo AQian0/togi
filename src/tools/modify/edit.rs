@@ -96,35 +96,6 @@ async fn apply_edits_blocking(
     .await
 }
 
-#[must_use]
-pub(super) fn levenshtein_distance(a: &str, b: &str) -> usize {
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-    let n = a_chars.len();
-    let m = b_chars.len();
-    if n == 0 {
-        return m;
-    }
-    if m == 0 {
-        return n;
-    }
-    let mut prev: Vec<usize> = (0..=m).collect();
-    let mut curr = vec![0usize; m + 1];
-    for i in 1..=n {
-        curr[0] = i;
-        for j in 1..=m {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] {
-                0
-            } else {
-                1
-            };
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[m]
-}
-
 fn find_similar(content: &str, needle: &str) -> Option<String> {
     let needle = needle.trim();
     if needle.is_empty() {
@@ -139,7 +110,7 @@ fn find_similar(content: &str, needle: &str) -> Option<String> {
         let best = content_lines
             .iter()
             .enumerate()
-            .map(|(i, line)| (i, levenshtein_distance(needle, line)))
+            .map(|(i, line)| (i, strsim::levenshtein(needle, line)))
             .filter(|(_, d)| *d <= max_dist)
             .min_by_key(|(_, d)| *d);
         return best.map(|(i, dist)| {
@@ -161,7 +132,7 @@ fn find_similar(content: &str, needle: &str) -> Option<String> {
     let best = (0..=content_lines.len() - w)
         .map(|start| {
             let window = content_lines[start..start + w].join("\n");
-            (start, levenshtein_distance(&joined_needle, &window))
+            (start, strsim::levenshtein(&joined_needle, &window))
         })
         .filter(|(_, d)| *d <= max_dist)
         .min_by_key(|(_, d)| *d);
@@ -490,15 +461,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn levenshtein_distance_should_return_zero_for_exact_match() {
-        assert_eq!(levenshtein_distance("abc", "abc"), 0);
-    }
-
-    #[test]
-    fn levenshtein_distance_should_count_single_edit_operations() {
-        assert_eq!(levenshtein_distance("abc", "abd"), 1);
-        assert_eq!(levenshtein_distance("abc", "ab"), 1);
-        assert_eq!(levenshtein_distance("abc", "abcd"), 1);
-    }
 }

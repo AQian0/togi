@@ -107,18 +107,7 @@ fn history_path() -> Option<PathBuf> {
     {
         return Some(PathBuf::from(path));
     }
-    home_dir().map(|home| home.join(HISTORY_FILE))
-}
-
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
+    dirs::home_dir().map(|home| home.join(HISTORY_FILE))
 }
 
 #[cfg(test)]

@@ -24,44 +24,9 @@ fn spans_display_width(spans: &[Span]) -> usize {
 
 /// 计算单个字符在终端中占用的列宽。
 ///
-/// ASCII 字符占 1 列，CJK 等宽字符占 2 列，控制字符和零宽字符占 0 列。
+/// 控制字符和零宽字符占 0 列，CJK 等宽字符占 2 列，其余占 1 列。
 pub fn display_width(c: char) -> usize {
-    if c == '\n' || c == '\r' {
-        return 0;
-    }
-    if c.is_control() {
-        return 0;
-    }
-    let cp = c as u32;
-    if matches!(
-        cp,
-        0x0300..=0x036F
-            | 0x200B..=0x200F
-            | 0xFE00..=0xFE0F
-            | 0xFEFF
-    ) {
-        return 0;
-    }
-    if matches!(
-        cp,
-        0x1100..=0x115F
-            | 0x2E80..=0x303E
-            | 0x3041..=0x33FF
-            | 0x3400..=0x4DBF
-            | 0x4E00..=0x9FFF
-            | 0xA000..=0xA4CF
-            | 0xAC00..=0xD7A3
-            | 0xF900..=0xFAFF
-            | 0xFE10..=0xFE19
-            | 0xFE30..=0xFE6F
-            | 0xFF00..=0xFF60
-            | 0xFFE0..=0xFFE6
-            | 0x1F300..=0x1FAFF
-            | 0x20000..=0x3FFFD
-    ) {
-        return 2;
-    }
-    1
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
 /// 计算字符串前 `col` 个字符在终端中的显示宽度。
