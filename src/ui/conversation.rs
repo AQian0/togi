@@ -191,6 +191,75 @@ impl Conversation {
         self.bump_content_version();
     }
 
+    /// 清空对话区全部内容，准备切换会话。
+    pub(crate) fn clear(&mut self) {
+        self.items.clear();
+        self.md_buf.clear();
+        self.md_block = None;
+        self.live_md_rendered.clear();
+        self.live_md_render_inflight = None;
+        self.bump_content_version();
+    }
+
+    /// 将单条历史消息重放到对话区。
+    pub(crate) fn replay_message(&mut self, msg: &rig::message::Message) {
+        use rig::message::{AssistantContent, UserContent};
+        match msg {
+            rig::message::Message::User { content } => {
+                for item in content.iter() {
+                    match item {
+                        UserContent::Text(t) => {
+                            self.push_user_message(&t.text);
+                        }
+                        UserContent::ToolResult(_) => {
+                            // 工具结果在重放时跳过，保持界面简洁
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            rig::message::Message::Assistant { content, .. } => {
+                for item in content.iter() {
+                    match item {
+                        AssistantContent::Text(t) => {
+                            self.flush_md();
+                            self.md_block = Some(block_answer());
+                            self.md_buf.push_str(&t.text);
+                            self.bump_md_version();
+                        }
+                        AssistantContent::ToolCall(tc) => {
+                            self.flush_md();
+                            let blk = block_tool_call();
+                            let label = format!("[tool: {}]", tc.function.name);
+                            self.items.push(ConvItem::Line(ConvLine::block(
+                                label,
+                                style::tool_call_block(),
+                                blk,
+                            )));
+                        }
+                        AssistantContent::Reasoning(r) => {
+                            self.flush_md();
+                            self.md_block = Some(block_reasoning());
+                            self.md_buf.push_str(&r.display_text());
+                            self.bump_md_version();
+                        }
+                        _ => {}
+                    }
+                }
+                self.flush_md();
+            }
+            rig::message::Message::System { content } => {
+                self.flush_md();
+                self.items.push(ConvItem::Line(ConvLine::block(
+                    content.clone(),
+                    style::system_block(),
+                    block_system(),
+                )));
+            }
+        }
+        self.bump_content_version();
+    }
+
     /// 返回 (ratatui 行, 对齐方式, 所属块样式)。
     pub(crate) fn all_lines_with_align(&self) -> Vec<(Line<'static>, Align, Option<BlockStyle>)> {
         let mut out: Vec<(Line<'static>, Align, Option<BlockStyle>)> = Vec::new();
@@ -351,6 +420,14 @@ impl Conversation {
                 self.md_block = None;
                 self.items.push(ConvItem::Line(ConvLine::empty()));
                 true
+            }
+            OutputItem::ReplaceHistory(messages) => {
+                self.clear();
+                for msg in &messages {
+                    self.replay_message(msg);
+                }
+                self.flush_md();
+                false
             }
         };
         self.bump_content_version();

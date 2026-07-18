@@ -67,6 +67,15 @@ impl TogiError for StoreError {
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// 会话元数据。
+#[derive(Debug, Clone)]
+pub struct SessionMeta {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// 消息持久化操作接口。
 ///
 /// 抽出 trait 便于测试时替换为内存实现，也为将来扩展（如跨会话搜索）留出余地。
@@ -87,6 +96,15 @@ pub trait MessageStore: Send + Sync {
     /// 统计指定会话的消息条数。
     #[allow(dead_code)]
     fn count<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<usize, StoreError>>;
+
+    /// 列出所有会话，按最近更新时间降序。
+    fn list_sessions<'a>(&'a self) -> BoxFuture<'a, Result<Vec<SessionMeta>, StoreError>>;
+
+    /// 创建新会话，返回生成的会话 ID。
+    fn create_session<'a>(&'a self, title: &'a str) -> BoxFuture<'a, Result<String, StoreError>>;
+
+    /// 删除指定会话及其全部消息。
+    fn delete_session<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<(), StoreError>>;
 }
 
 /// 基于 Turso 本地数据库的消息持久化实现。
@@ -130,7 +148,31 @@ impl HistoryStore {
         )
         .await
         .map_err(|source| StoreError::Query { source })?;
+
+        // 迁移：为 sessions 表补充多会话所需的列。
+        Self::migrate(&conn).await?;
+
         Ok(Self { conn, path })
+    }
+
+    /// 执行 schema 迁移：为旧版数据库补充缺失的列。
+    async fn migrate(conn: &turso::Connection) -> Result<(), StoreError> {
+        let migrations = [
+            "ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+        ];
+        for sql in migrations {
+            // 列已存在时 ALTER TABLE 会报错，忽略即可。
+            let _ = conn.execute_batch(sql).await;
+        }
+        // 为旧数据填充默认值。
+        conn.execute_batch(
+            "UPDATE sessions SET title = id WHERE title = '';
+             UPDATE sessions SET updated_at = created_at WHERE updated_at = '';",
+        )
+        .await
+        .map_err(|source| StoreError::Query { source })?;
+        Ok(())
     }
 
     /// 返回底层数据库文件路径（用于诊断日志）。
@@ -165,10 +207,17 @@ impl HistoryStore {
     }
 
     async fn do_save(&self, session_id: &str, messages: &[Message]) -> Result<(), StoreError> {
-        // 确保 session 行存在（幂等）。
+        // 确保 session 行存在（幂等），并更新最近活跃时间。
         self.conn
             .execute(
                 "INSERT OR IGNORE INTO sessions (id) VALUES (?1)",
+                [session_id],
+            )
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        self.conn
+            .execute(
+                "UPDATE sessions SET updated_at = datetime('now') WHERE id = ?1",
                 [session_id],
             )
             .await
@@ -238,6 +287,69 @@ impl HistoryStore {
             Ok(0)
         }
     }
+
+    async fn do_list_sessions(&self) -> Result<Vec<SessionMeta>, StoreError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC",
+                turso::params_from_iter(std::iter::empty::<turso::Value>()),
+            )
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        let mut sessions = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|source| StoreError::Query { source })?
+        {
+            sessions.push(SessionMeta {
+                id: row
+                    .get(0)
+                    .map_err(|source| StoreError::Query { source })?,
+                title: row
+                    .get(1)
+                    .map_err(|source| StoreError::Query { source })?,
+                created_at: row
+                    .get(2)
+                    .map_err(|source| StoreError::Query { source })?,
+                updated_at: row
+                    .get(3)
+                    .map_err(|source| StoreError::Query { source })?,
+            });
+        }
+        Ok(sessions)
+    }
+
+    async fn do_create_session(&self, title: &str) -> Result<String, StoreError> {
+        let id = uuid_v4();
+        self.conn
+            .execute(
+                "INSERT INTO sessions (id, title, updated_at) VALUES (?1, ?2, datetime('now'))",
+                turso::params_from_iter([
+                    turso::Value::from(id.as_str()),
+                    turso::Value::from(title),
+                ]),
+            )
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        Ok(id)
+    }
+
+    async fn do_delete_session(&self, session_id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM messages WHERE session_id = ?1",
+                [session_id],
+            )
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        self.conn
+            .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        Ok(())
+    }
 }
 
 impl MessageStore for HistoryStore {
@@ -260,6 +372,18 @@ impl MessageStore for HistoryStore {
     fn count<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<usize, StoreError>> {
         Box::pin(self.do_count(session_id))
     }
+
+    fn list_sessions<'a>(&'a self) -> BoxFuture<'a, Result<Vec<SessionMeta>, StoreError>> {
+        Box::pin(self.do_list_sessions())
+    }
+
+    fn create_session<'a>(&'a self, title: &'a str) -> BoxFuture<'a, Result<String, StoreError>> {
+        Box::pin(self.do_create_session(title))
+    }
+
+    fn delete_session<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<(), StoreError>> {
+        Box::pin(self.do_delete_session(session_id))
+    }
 }
 
 /// 计算默认数据库文件路径。
@@ -281,6 +405,39 @@ pub fn default_db_path() -> Option<PathBuf> {
 /// 唯一 ID 生成逻辑。
 pub fn default_session_id() -> &'static str {
     constants::DEFAULT_SESSION_ID
+}
+
+/// 生成 RFC 4122 v4 UUID（不带连字符，小写十六进制）。
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let nanos = now.subsec_nanos();
+    let secs = now.as_secs();
+    // 基于时间戳 + 随机数生成简单 UUID，避免引入外部依赖。
+    let mut buf = format!("{secs:08x}{nanos:08x}");
+    let mut rng = nanos as u64;
+    for _ in 0..16 {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        buf.push_str(&format!("{:02x}", (rng >> 32) as u8));
+    }
+    // 设置 version 4 和 variant bits。
+    let mut bytes = hex_to_bytes(&buf);
+    if bytes.len() >= 8 {
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn hex_to_bytes(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0))
+        .collect()
 }
 
 #[cfg(test)]
@@ -361,5 +518,65 @@ mod tests {
         store.clear("s1").await.unwrap();
         assert_eq!(store.count("s1").await.unwrap(), 0);
         assert_eq!(store.count("s2").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_sessions_returns_all_sessions() {
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        store
+            .save("s1", &[sample_user_message("hello")])
+            .await
+            .unwrap();
+        store
+            .save("s2", &[sample_user_message("world")])
+            .await
+            .unwrap();
+        let sessions = store.list_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn create_session_generates_id_and_stores_title() {
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        let id = store.create_session("测试会话").await.unwrap();
+        assert!(!id.is_empty());
+        let sessions = store.list_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "测试会话");
+        assert_eq!(sessions[0].id, id);
+    }
+
+    #[tokio::test]
+    async fn delete_session_removes_messages_and_session() {
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        let id = store.create_session("待删除").await.unwrap();
+        store
+            .save(&id, &[sample_user_message("hello")])
+            .await
+            .unwrap();
+        assert_eq!(store.count(&id).await.unwrap(), 1);
+        store.delete_session(&id).await.unwrap();
+        assert_eq!(store.count(&id).await.unwrap(), 0);
+        let sessions = store.list_sessions().await.unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn save_updates_updated_at() {
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        store
+            .save("s1", &[sample_user_message("first")])
+            .await
+            .unwrap();
+        let sessions = store.list_sessions().await.unwrap();
+        let first_updated = sessions[0].updated_at.clone();
+        // 确保时间戳有变化
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        store
+            .save("s1", &[sample_user_message("second")])
+            .await
+            .unwrap();
+        let sessions = store.list_sessions().await.unwrap();
+        assert!(sessions[0].updated_at >= first_updated);
     }
 }

@@ -14,6 +14,10 @@ builtins-shortcut-page = PageUp/PageDown  Scroll conversation history
 builtins-help-desc = Show this help
 builtins-clear-desc = Clear conversation history and reset screen
 builtins-history-desc = Show current conversation history
+builtins-sessions-desc = List all sessions
+builtins-switch-desc = Switch to a session (number or ID)
+builtins-new-desc = Create a new session
+builtins-delete-desc = Delete a session
 builtins-cwd-desc = Show current working directory
 builtins-exit-desc = Exit (also via exit / quit or Ctrl-C)
 
@@ -22,6 +26,19 @@ builtins-history-title = Conversation history ({ $count } messages)
 builtins-history-empty = No conversation history yet.
 builtins-cwd-display = Current working directory: { $cwd }
 builtins-unknown-command = Unknown command `{ $command }`. Type /help to see available commands.
+builtins-sessions-title = Sessions ({ $count })
+builtins-sessions-empty = No sessions yet.
+builtins-sessions-unavailable = Database unavailable, cannot manage sessions.
+builtins-switch-usage = Usage: /switch <number|session-id>
+builtins-switch-same = Already in the current session.
+builtins-switch-done = Switched to session { $id } ({ $count } messages).
+builtins-new-done = Created new session { $id } ({ $title }).
+builtins-new-default-title = New session
+builtins-delete-usage = Usage: /delete <number|session-id>
+builtins-delete-current = Cannot delete the current session, switch to another session first.
+builtins-delete-done = Deleted session { $id }.
+builtins-session-not-found = Session `{ $input }` not found.
+builtins-session-ambiguous = Session ID `{ $input }` matches multiple sessions, provide a longer prefix.
 
 # ── App ──────────────────────────────────────────────────────────────
 app-cancelled = Cancelled.

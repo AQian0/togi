@@ -22,13 +22,14 @@ use tokio_util::sync::CancellationToken;
 
 type History = Arc<RwLock<Arc<[Message]>>>;
 type UiSender = mpsc::UnboundedSender<OutputItem>;
+type SessionId = Arc<RwLock<Arc<str>>>;
 
 #[derive(Clone)]
 struct AppController {
     agent: Arc<DynamicAgent>,
     history: History,
     store: Option<Arc<dyn MessageStore>>,
-    session_id: Arc<str>,
+    session_id: SessionId,
     registry: Arc<ToolRegistry>,
     cancel_tx: watch::Sender<bool>,
     task_cancel: CancellationToken,
@@ -39,7 +40,7 @@ impl AppController {
         agent: Arc<DynamicAgent>,
         history: History,
         store: Option<Arc<dyn MessageStore>>,
-        session_id: Arc<str>,
+        session_id: SessionId,
         registry: Arc<ToolRegistry>,
         cancel_tx: watch::Sender<bool>,
         task_cancel: CancellationToken,
@@ -64,6 +65,8 @@ impl AppController {
 
     async fn handle_submission(self, message: String, tx: UiSender) {
         if message.starts_with('/') {
+            // 记录命令前的会话 ID，用于检测是否发生了切换
+            let old_sid = self.session_id.read().await.clone();
             let handled = crate::cli::builtins::handle_command(
                 &message,
                 tx.clone(),
@@ -73,10 +76,17 @@ impl AppController {
             )
             .await;
             if handled {
+                // 检查会话是否已切换，如果是则通知 UI 重放历史
+                let new_sid = self.session_id.read().await.clone();
+                if *new_sid != *old_sid {
+                    let hist = self.history.read().await.clone();
+                    let _ = tx.send(OutputItem::ReplaceHistory(hist.to_vec()));
+                }
                 return;
             }
         }
 
+        let session_id = self.session_id.read().await.clone();
         let hist = Arc::clone(&*self.history.read().await);
         let _ = self.cancel_tx.send_replace(false);
         let cancel_rx = self.cancel_tx.subscribe();
@@ -114,7 +124,7 @@ impl AppController {
                 *self.history.write().await = Arc::from(updated_history);
                 if let Some(store) = &self.store {
                     let hist = self.history.read().await;
-                    if let Err(err) = store.save(&self.session_id, &hist).await {
+                    if let Err(err) = store.save(&session_id, &hist).await {
                         let _ = tx.send(OutputItem::Notice(
                             crate::t!("store-save-error", error = err.user_message()),
                         ));
@@ -213,16 +223,23 @@ fn build_agent(
 async fn init_history() -> (
     History,
     Option<Arc<dyn MessageStore>>,
-    Arc<str>,
+    SessionId,
 ) {
-    let session_id: Arc<str> = Arc::from(crate::store::default_session_id());
+    let session_id: SessionId = Arc::new(RwLock::new(Arc::from(
+        crate::store::default_session_id(),
+    )));
     let Some(db_path) = crate::store::default_db_path() else {
-        return (Arc::new(RwLock::new(Arc::from(Vec::new()))), None, session_id);
+        return (
+            Arc::new(RwLock::new(Arc::from(Vec::new()))),
+            None,
+            session_id,
+        );
     };
     match HistoryStore::open(&db_path).await {
         Ok(store) => {
             let store: Arc<dyn MessageStore> = Arc::new(store);
-            let messages = store.load(&session_id).await.unwrap_or_else(|err| {
+            let sid = session_id.read().await.clone();
+            let messages = store.load(&sid).await.unwrap_or_else(|err| {
                 eprintln!(
                     "{}",
                     crate::t!("store-load-error", error = err.user_message())
@@ -241,7 +258,11 @@ async fn init_history() -> (
                     error = err.user_message()
                 )
             );
-            (Arc::new(RwLock::new(Arc::from(Vec::new()))), None, session_id)
+            (
+                Arc::new(RwLock::new(Arc::from(Vec::new()))),
+                None,
+                session_id,
+            )
         }
     }
 }

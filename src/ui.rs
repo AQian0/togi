@@ -55,6 +55,8 @@ pub enum OutputItem {
     ToolResult(String),
     Notice(String),
     Error(ErrorInfo),
+    /// 切换会话后重放历史消息
+    ReplaceHistory(Vec<rig::message::Message>),
     Done,
 }
 

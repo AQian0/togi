@@ -14,6 +14,10 @@ builtins-shortcut-page = PageUp/PageDown  滚动对话历史
 builtins-help-desc = 显示这份帮助
 builtins-clear-desc = 清空对话历史并重置屏幕
 builtins-history-desc = 显示当前对话历史
+builtins-sessions-desc = 列出所有会话
+builtins-switch-desc = 切换到指定会话（编号或 ID）
+builtins-new-desc = 创建新会话
+builtins-delete-desc = 删除指定会话
 builtins-cwd-desc = 显示当前工作目录
 builtins-exit-desc = 退出（也可用 exit / quit 或 Ctrl-C）
 
@@ -22,6 +26,19 @@ builtins-history-title = 对话历史（共 { $count } 条消息）
 builtins-history-empty = 暂无对话历史。
 builtins-cwd-display = 当前工作目录：{ $cwd }
 builtins-unknown-command = 未知命令 `{ $command }`。输入 /help 查看可用命令。
+builtins-sessions-title = 会话列表（共 { $count } 个）
+builtins-sessions-empty = 暂无会话。
+builtins-sessions-unavailable = 数据库不可用，无法管理会话。
+builtins-switch-usage = 用法：/switch <编号|会话ID>
+builtins-switch-same = 已在当前会话中。
+builtins-switch-done = 已切换到会话 { $id }（共 { $count } 条消息）。
+builtins-new-done = 已创建新会话 { $id }（{ $title }）。
+builtins-new-default-title = 新会话
+builtins-delete-usage = 用法：/delete <编号|会话ID>
+builtins-delete-current = 无法删除当前会话，请先切换到其他会话。
+builtins-delete-done = 已删除会话 { $id }。
+builtins-session-not-found = 未找到会话 `{ $input }`。
+builtins-session-ambiguous = 会话 ID `{ $input }` 匹配到多个会话，请提供更长的前缀。
 
 # ── App ──────────────────────────────────────────────────────────────
 app-cancelled = 已取消。
