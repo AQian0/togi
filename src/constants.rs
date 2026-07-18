@@ -146,6 +146,15 @@ pub(crate) const ENV_LOG_CONFIG: &str = "TOGI_LOG_CONFIG";
 /// 自定义历史文件路径的环境变量。
 pub(crate) const ENV_HISTORY_PATH: &str = "TOGI_HISTORY";
 
+/// 自定义 Turso 数据库文件路径的环境变量。
+pub(crate) const ENV_DB_PATH: &str = "TOGI_DB";
+
+/// 数据库文件名。
+pub(crate) const DB_FILENAME: &str = "togi.db";
+
+/// 默认会话 ID。暂不支持多会话管理，全部对话归属此会话。
+pub(crate) const DEFAULT_SESSION_ID: &str = "default";
+
 // ── 临时文件 ──────────────────────────────────────────────────────
 
 /// 原子写入临时文件后缀格式。

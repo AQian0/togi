@@ -13,10 +13,13 @@ builtins-shortcut-page = PageUp/PageDown  滚动对话历史
 
 builtins-help-desc = 显示这份帮助
 builtins-clear-desc = 清空对话历史并重置屏幕
+builtins-history-desc = 显示当前对话历史
 builtins-cwd-desc = 显示当前工作目录
 builtins-exit-desc = 退出（也可用 exit / quit 或 Ctrl-C）
 
 builtins-clear-done = 已清空对话历史（共 { $count } 条消息）。
+builtins-history-title = 对话历史（共 { $count } 条消息）
+builtins-history-empty = 暂无对话历史。
 builtins-cwd-display = 当前工作目录：{ $cwd }
 builtins-unknown-command = 未知命令 `{ $command }`。输入 /help 查看可用命令。
 
@@ -75,6 +78,15 @@ conv-empty-output = （无输出）
 conv-folded-lines = … 其余 { $count } 行（已折叠）
 conv-retryable =  · 可重试
 conv-error-format = !! [{ $code } · { $kind }{ $retry }] { $message }
+
+# ── Store ────────────────────────────────────────────────────────────
+store-save-ok = 对话已保存（共 { $count } 条消息）。
+store-save-error = 无法保存对话：{ $error }
+store-load-error = 无法加载对话历史：{ $error }
+store-clear-error = 无法清除已存储的历史：{ $error }
+store-open-error = 无法打开数据库 { $path }：{ $error }
+store-query-error = 数据库查询失败：{ $error }
+store-deserialize-error = 无法反序列化存储的消息：{ $error }
 
 # ── Render ───────────────────────────────────────────────────────────
 render-scroll-indicator = ── 回到底部 (PageDown) ──

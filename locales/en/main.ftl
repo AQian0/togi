@@ -13,10 +13,13 @@ builtins-shortcut-page = PageUp/PageDown  Scroll conversation history
 
 builtins-help-desc = Show this help
 builtins-clear-desc = Clear conversation history and reset screen
+builtins-history-desc = Show current conversation history
 builtins-cwd-desc = Show current working directory
 builtins-exit-desc = Exit (also via exit / quit or Ctrl-C)
 
 builtins-clear-done = Cleared conversation history ({ $count } messages).
+builtins-history-title = Conversation history ({ $count } messages)
+builtins-history-empty = No conversation history yet.
 builtins-cwd-display = Current working directory: { $cwd }
 builtins-unknown-command = Unknown command `{ $command }`. Type /help to see available commands.
 
@@ -75,6 +78,15 @@ conv-empty-output = (no output)
 conv-folded-lines = … { $count } more lines (folded)
 conv-retryable =  · retryable
 conv-error-format = !! [{ $code } · { $kind }{ $retry }] { $message }
+
+# ── Store ────────────────────────────────────────────────────────────
+store-save-ok = Conversation saved ({ $count } messages).
+store-save-error = Could not save conversation: { $error }
+store-load-error = Could not load conversation history: { $error }
+store-clear-error = Could not clear stored history: { $error }
+store-open-error = Could not open database { $path }: { $error }
+store-query-error = Database query failed: { $error }
+store-deserialize-error = Could not deserialize stored message: { $error }
 
 # ── Render ───────────────────────────────────────────────────────────
 render-scroll-indicator = ── Back to bottom (PageDown) ──

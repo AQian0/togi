@@ -1,8 +1,10 @@
 use crate::agent::DynamicAgent;
 use crate::command::Args;
 use crate::constants;
+use crate::error::TogiError;
 use crate::inject::{CWD_PARAM, Injection, inject};
 use crate::paginate::paginate;
+use crate::store::{HistoryStore, MessageStore};
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
@@ -25,6 +27,8 @@ type UiSender = mpsc::UnboundedSender<OutputItem>;
 struct AppController {
     agent: Arc<DynamicAgent>,
     history: History,
+    store: Option<Arc<dyn MessageStore>>,
+    session_id: Arc<str>,
     registry: Arc<ToolRegistry>,
     cancel_tx: watch::Sender<bool>,
     task_cancel: CancellationToken,
@@ -34,6 +38,8 @@ impl AppController {
     fn new(
         agent: Arc<DynamicAgent>,
         history: History,
+        store: Option<Arc<dyn MessageStore>>,
+        session_id: Arc<str>,
         registry: Arc<ToolRegistry>,
         cancel_tx: watch::Sender<bool>,
         task_cancel: CancellationToken,
@@ -41,6 +47,8 @@ impl AppController {
         Self {
             agent,
             history,
+            store,
+            session_id,
             registry,
             cancel_tx,
             task_cancel,
@@ -56,8 +64,14 @@ impl AppController {
 
     async fn handle_submission(self, message: String, tx: UiSender) {
         if message.starts_with('/') {
-            let handled =
-                crate::builtins::handle_command(&message, tx.clone(), &self.history).await;
+            let handled = crate::builtins::handle_command(
+                &message,
+                tx.clone(),
+                &self.history,
+                self.store.as_ref(),
+                &self.session_id,
+            )
+            .await;
             if handled {
                 return;
             }
@@ -98,6 +112,14 @@ impl AppController {
         match result {
             Ok(updated_history) => {
                 *self.history.write().await = Arc::from(updated_history);
+                if let Some(store) = &self.store {
+                    let hist = self.history.read().await;
+                    if let Err(err) = store.save(&self.session_id, &hist).await {
+                        let _ = tx.send(OutputItem::Notice(
+                            crate::t!("store-save-error", error = err.user_message()),
+                        ));
+                    }
+                }
                 let _ = tx.send(OutputItem::Done);
             }
             Err(err) => {
@@ -185,6 +207,45 @@ fn build_agent(
     }
 }
 
+/// 初始化持久化存储并恢复上次会话的历史记录。
+///
+/// 数据库不可用时静默降级为纯内存模式，不影响正常对话功能。
+async fn init_history() -> (
+    History,
+    Option<Arc<dyn MessageStore>>,
+    Arc<str>,
+) {
+    let session_id: Arc<str> = Arc::from(crate::store::default_session_id());
+    let Some(db_path) = crate::store::default_db_path() else {
+        return (Arc::new(RwLock::new(Arc::from(Vec::new()))), None, session_id);
+    };
+    match HistoryStore::open(&db_path).await {
+        Ok(store) => {
+            let store: Arc<dyn MessageStore> = Arc::new(store);
+            let messages = store.load(&session_id).await.unwrap_or_else(|err| {
+                eprintln!(
+                    "{}",
+                    crate::t!("store-load-error", error = err.user_message())
+                );
+                Vec::new()
+            });
+            let history = Arc::new(RwLock::new(Arc::from(messages)));
+            (history, Some(store), session_id)
+        }
+        Err(err) => {
+            eprintln!(
+                "{}",
+                crate::t!(
+                    "store-open-error",
+                    path = db_path.display().to_string(),
+                    error = err.user_message()
+                )
+            );
+            (Arc::new(RwLock::new(Arc::from(Vec::new()))), None, session_id)
+        }
+    }
+}
+
 pub async fn run() -> crate::error::Result<()> {
     let args = Args::parse();
     let config = crate::config::Config::load()?;
@@ -197,13 +258,15 @@ pub async fn run() -> crate::error::Result<()> {
     })?;
     let (tools, registry) = build_tools(&cwd);
     let agent = Arc::new(build_agent(&args, &config, tools)?);
-    let history = Arc::new(RwLock::new(Arc::from(Vec::new())));
+    let (history, store, session_id) = init_history().await;
     let mut session = Session::new()?;
 
     let global_cancel = CancellationToken::new();
     let controller = AppController::new(
         agent,
         history,
+        store,
+        session_id,
         Arc::new(registry),
         session.cancel_sender(),
         global_cancel.clone(),
