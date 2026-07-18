@@ -61,6 +61,20 @@ async fn save_replaces_previous_history() {
 }
 
 #[tokio::test]
+async fn save_with_shorter_history_falls_back_to_full_replace() {
+    let dir = crate::support::TestDir::new();
+    let db_path = dir.path().join("test.db");
+    let store = HistoryStore::open(&db_path).await.unwrap();
+
+    store.save("default", &sample_conversation()).await.unwrap();
+    assert_eq!(store.count("default").await.unwrap(), 4);
+
+    store.save("default", &[user_msg("only")]).await.unwrap();
+    let loaded = store.load("default").await.unwrap();
+    assert_eq!(loaded.len(), 1);
+}
+
+#[tokio::test]
 async fn clear_removes_all_messages() {
     let dir = crate::support::TestDir::new();
     let db_path = dir.path().join("test.db");

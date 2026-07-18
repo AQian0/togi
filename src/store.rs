@@ -186,30 +186,45 @@ impl HistoryStore {
     }
 
     async fn do_save(&self, session_id: &str, messages: &[Message]) -> Result<(), StoreError> {
+        // ponytail: 依赖“会话历史只增不改”的事实做增量写入，已存前缀跳过序列化和插入。
+        // 若未来加入历史压缩/重写功能，需退回全量替换。
+        let existing = self.do_count(session_id).await?;
+        let tx = turso::transaction::Transaction::new_unchecked(
+            &self.conn,
+            turso::transaction::TransactionBehavior::Immediate,
+        )
+        .await
+        .map_err(|source| StoreError::Query { source })?;
         // 确保 session 行存在（幂等），并更新最近活跃时间。
-        self.conn
-            .execute(
-                "INSERT OR IGNORE INTO sessions (id) VALUES (?1)",
-                [session_id],
-            )
-            .await
-            .map_err(|source| StoreError::Query { source })?;
-        self.conn
-            .execute(
-                "UPDATE sessions SET updated_at = datetime('now') WHERE id = ?1",
-                [session_id],
-            )
-            .await
-            .map_err(|source| StoreError::Query { source })?;
-        // 全量替换：先删后插。
-        self.conn
-            .execute(
+        tx.execute(
+            "INSERT OR IGNORE INTO sessions (id) VALUES (?1)",
+            [session_id],
+        )
+        .await
+        .map_err(|source| StoreError::Query { source })?;
+        tx.execute(
+            "UPDATE sessions SET updated_at = datetime('now') WHERE id = ?1",
+            [session_id],
+        )
+        .await
+        .map_err(|source| StoreError::Query { source })?;
+        let pending = if existing <= messages.len() {
+            &messages[existing..]
+        } else {
+            // 历史变短（当前不会发生），退化为全量替换。
+            tx.execute(
                 "DELETE FROM messages WHERE session_id = ?1",
                 [session_id],
             )
             .await
             .map_err(|source| StoreError::Query { source })?;
-        for msg in messages {
+            messages
+        };
+        let mut stmt = tx
+            .prepare("INSERT INTO messages (session_id, role, content) VALUES (?1, ?2, ?3)")
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        for msg in pending {
             let role = match msg {
                 Message::User { .. } => "user",
                 Message::Assistant { .. } => "assistant",
@@ -217,18 +232,18 @@ impl HistoryStore {
             };
             let json = serde_json::to_string(msg)
                 .map_err(|source| StoreError::Deserialize { source })?;
-            self.conn
-                .execute(
-                    "INSERT INTO messages (session_id, role, content) VALUES (?1, ?2, ?3)",
-                    turso::params_from_iter([
-                        turso::Value::from(session_id),
-                        turso::Value::from(role),
-                        turso::Value::from(json),
-                    ]),
-                )
-                .await
-                .map_err(|source| StoreError::Query { source })?;
+            stmt.execute(turso::params_from_iter([
+                turso::Value::from(session_id),
+                turso::Value::from(role),
+                turso::Value::from(json),
+            ]))
+            .await
+            .map_err(|source| StoreError::Query { source })?;
         }
+        drop(stmt);
+        tx.commit()
+            .await
+            .map_err(|source| StoreError::Query { source })?;
         Ok(())
     }
 
@@ -243,7 +258,6 @@ impl HistoryStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     async fn do_count(&self, session_id: &str) -> Result<usize, StoreError> {
         let mut rows = self
             .conn
