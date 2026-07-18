@@ -1,4 +1,4 @@
-use crate::error::TogiError;
+use crate::shared::error::TogiError;
 use crate::store::MessageStore;
 use crate::ui::interaction::OutputItem;
 use rig::message::Message;

@@ -1,7 +1,7 @@
 use super::capture::{StreamCapture, StreamChunk};
 use super::process;
-use crate::common::format_size;
-use crate::constants;
+use crate::shared::util::format_size;
+use crate::shared::constants;
 use std::fmt::Write;
 use std::path::Path;
 use std::process::ExitStatus;

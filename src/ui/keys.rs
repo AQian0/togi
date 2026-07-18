@@ -3,7 +3,7 @@
 //! 将 [`Session`] 的按键分发逻辑提取到独立模块，使 `session.rs` 保持精简。
 //! 通过独立的 `impl Session` 块直接访问 Session 的 `pub(crate)` 字段。
 
-use crate::constants;
+use crate::shared::constants;
 use crate::ui::session::Session;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;

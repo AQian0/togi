@@ -38,7 +38,7 @@ pub(super) async fn read_head_from_file(
 ) -> Result<Vec<u8>, std::io::Error> {
     read_chunk_from_file(
         file,
-        file_size.min(crate::constants::BINARY_DETECTION_SAMPLE_SIZE as u64),
+        file_size.min(crate::shared::constants::BINARY_DETECTION_SAMPLE_SIZE as u64),
     )
     .await
 }

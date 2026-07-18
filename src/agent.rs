@@ -1,4 +1,4 @@
-use crate::error::{ErrorKind, TogiError};
+use crate::shared::error::{ErrorKind, TogiError};
 use futures::StreamExt;
 use itertools::Itertools;
 use rig::agent::MultiTurnStreamItem;
@@ -456,14 +456,14 @@ mod tests {
 
     #[test]
     fn build_unknown_model_returns_error() {
-        use crate::error::TogiError;
+        use crate::shared::error::TogiError;
         let result = DynamicAgent::build("unknown-model", "", vec![], None, 3);
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("expected error for unknown model"),
         };
         assert_eq!(err.code(), "agent.unknown_provider");
-        assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+        assert_eq!(err.kind(), crate::shared::error::ErrorKind::InvalidArgument);
         let err_msg = err.to_string();
         assert!(
             err_msg.contains("unknown-model"),

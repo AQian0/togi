@@ -3,7 +3,7 @@
 //! 基于 ratatui 全屏模式，底部始终展示输入区（上横线分隔 + 多行编辑），
 //! 对话内容在上方滚动输出。提交后不清除输入区，流式回答实时刷入上方对话区。
 
-use crate::constants;
+use crate::shared::constants;
 use crate::ui::OutputItem;
 use crate::ui::conversation::Conversation;
 use crate::ui::editor::Editor;

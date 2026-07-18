@@ -1,5 +1,5 @@
-use crate::constants;
-use crate::error::{ErrorKind, TogiError};
+use crate::shared::constants;
+use crate::shared::error::{ErrorKind, TogiError};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

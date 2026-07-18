@@ -1,9 +1,9 @@
-use crate::common::{
+use crate::shared::util::{
     FileTooLargeError, IoErrorClass, ToolPathError, classify_io_error, is_binary, resolve_tool_path,
 };
-use crate::constants;
-use crate::error::{ErrorKind, TogiError};
-use crate::text_encoding::{decode_text, encoding_from_label, is_binary_output_encoding};
+use crate::shared::constants;
+use crate::shared::error::{ErrorKind, TogiError};
+use crate::shared::text_encoding::{decode_text, encoding_from_label, is_binary_output_encoding};
 use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -138,8 +138,8 @@ impl TogiError for ReadError {
             Self::FileTooLarge(err) => crate::t!(
                 "error-file-too-large",
                 path = err.path.clone(),
-                size = crate::common::format_size(err.size),
-                max = crate::common::format_size(err.max)
+                size = crate::shared::util::format_size(err.size),
+                max = crate::shared::util::format_size(err.max)
             ),
             Self::Io { path, source } => crate::t!(
                 "error-read-io",
@@ -216,7 +216,7 @@ impl Tool for Read {
         }
         let file_size = metadata.len();
 
-        crate::common::check_file_size(&display, file_size)?;
+        crate::shared::util::check_file_size(&display, file_size)?;
 
         let is_large = file_size > constants::LARGE_FILE_THRESHOLD;
         let offset_bytes = args.offset_bytes.unwrap_or(0);
@@ -258,7 +258,7 @@ impl Tool for Read {
                 .min(remaining_bytes);
             let streaming_encoding = requested_text_encoding.or_else(|| {
                 if offset_bytes == 0 {
-                    crate::text_encoding::encoding_for_bom(&head).map(|(encoding, _)| encoding)
+                    crate::shared::text_encoding::encoding_for_bom(&head).map(|(encoding, _)| encoding)
                 } else {
                     None
                 }

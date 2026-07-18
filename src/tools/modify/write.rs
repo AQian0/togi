@@ -1,8 +1,8 @@
 use super::edit::unified_diff_blocking;
 use super::{Modify, ModifyError};
-use crate::common::{append_diff, format_size};
-use crate::constants;
-use crate::text_encoding::{decode_text, encode_text};
+use crate::shared::util::{append_diff, format_size};
+use crate::shared::constants;
+use crate::shared::text_encoding::{decode_text, encode_text};
 use std::path::Path;
 
 #[must_use]

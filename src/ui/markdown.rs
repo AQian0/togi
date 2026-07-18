@@ -248,7 +248,7 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
             Event::Rule => {
                 flush_spans(&mut spans, &mut lines);
                 lines.push(Line::from(Span::styled(
-                    "─".repeat(crate::constants::HORIZONTAL_RULE_WIDTH),
+                    "─".repeat(crate::shared::constants::HORIZONTAL_RULE_WIDTH),
                     style::dim(),
                 )));
                 lines.push(Line::from(""));

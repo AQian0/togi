@@ -79,7 +79,7 @@ pub fn summarize_readonly_result(text: &str) -> String {
 }
 
 pub fn truncate_inline(text: &str) -> String {
-    let max = crate::constants::SUMMARY_MAX_INLINE_CHARS;
+    let max = crate::shared::constants::SUMMARY_MAX_INLINE_CHARS;
     let collapsed: String = text.split_whitespace().join(" ");
     let mut out: String = collapsed.chars().take(max).collect();
     if collapsed.chars().count() > max {

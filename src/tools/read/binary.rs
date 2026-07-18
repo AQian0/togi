@@ -1,6 +1,6 @@
 use super::{Read, ReadError, io};
-use crate::common::format_size;
-use crate::constants;
+use crate::shared::util::format_size;
+use crate::shared::constants;
 use std::fmt::Write;
 use std::path::Path;
 

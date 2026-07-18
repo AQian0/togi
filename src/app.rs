@@ -1,9 +1,9 @@
 use crate::agent::DynamicAgent;
-use crate::command::Args;
-use crate::constants;
-use crate::error::TogiError;
-use crate::inject::{CWD_PARAM, Injection, inject};
-use crate::paginate::paginate;
+use crate::cli::command::Args;
+use crate::shared::constants;
+use crate::shared::error::TogiError;
+use crate::pipeline::inject::{CWD_PARAM, Injection, inject};
+use crate::pipeline::paginate::paginate;
 use crate::store::{HistoryStore, MessageStore};
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
@@ -64,7 +64,7 @@ impl AppController {
 
     async fn handle_submission(self, message: String, tx: UiSender) {
         if message.starts_with('/') {
-            let handled = crate::builtins::handle_command(
+            let handled = crate::cli::builtins::handle_command(
                 &message,
                 tx.clone(),
                 &self.history,
@@ -130,7 +130,7 @@ impl AppController {
     }
 }
 
-fn apply_theme(args: &Args, config: &crate::config::Config) -> crate::error::Result<()> {
+fn apply_theme(args: &Args, config: &crate::config::Config) -> crate::shared::error::Result<()> {
     let theme_name = args
         .theme
         .as_deref()
@@ -182,7 +182,7 @@ fn build_agent(
     args: &Args,
     config: &crate::config::Config,
     tools: Vec<Box<dyn ToolDyn>>,
-) -> crate::error::Result<DynamicAgent> {
+) -> crate::shared::error::Result<DynamicAgent> {
     let model_name = args.model.as_ref().or(config.system.model.as_ref());
     let api_key = args.api_key.as_deref();
     let preamble = config.effective_preamble();
@@ -203,7 +203,7 @@ fn build_agent(
             api_key,
             config.effective_max_multi_turn(),
         )
-        .map_err(|source| crate::error::AppError::DefaultModelInit { source })
+        .map_err(|source| crate::shared::error::AppError::DefaultModelInit { source })
     }
 }
 
@@ -246,13 +246,13 @@ async fn init_history() -> (
     }
 }
 
-pub async fn run() -> crate::error::Result<()> {
+pub async fn run() -> crate::shared::error::Result<()> {
     let args = Args::parse();
     let config = crate::config::Config::load()?;
     apply_theme(&args, &config)?;
     preload_highlighting().await;
 
-    let cwd = std::env::current_dir().map_err(|source| crate::error::AppError::Io {
+    let cwd = std::env::current_dir().map_err(|source| crate::shared::error::AppError::Io {
         context: "get current working directory",
         source,
     })?;
@@ -287,7 +287,7 @@ pub async fn run() -> crate::error::Result<()> {
                 "{}",
                 crate::t!(
                     "app-session-error",
-                    error = crate::error::TogiError::user_message(&e)
+                    error = crate::shared::error::TogiError::user_message(&e)
                 )
             );
         }
@@ -296,7 +296,7 @@ pub async fn run() -> crate::error::Result<()> {
                 "{}",
                 crate::t!(
                     "app-history-save-error",
-                    error = crate::error::TogiError::user_message(&e)
+                    error = crate::shared::error::TogiError::user_message(&e)
                 )
             );
         }

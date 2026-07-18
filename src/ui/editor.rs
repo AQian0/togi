@@ -3,7 +3,7 @@
 //! 提供多行文本编辑能力：光标移动、文本插入/删除、词级操作、
 //! 行级操作以及视口滚动。
 
-use crate::constants;
+use crate::shared::constants;
 
 /// 基于字符（而非字节）的文本长度。
 #[must_use]

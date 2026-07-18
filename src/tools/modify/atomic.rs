@@ -47,10 +47,10 @@ where
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| crate::constants::TEMP_FILE_FALLBACK_NAME.to_string());
+        .unwrap_or_else(|| crate::shared::constants::TEMP_FILE_FALLBACK_NAME.to_string());
     let tmp = dir.join(format!(
         ".{file_name}.{}-{}.tmp",
-        crate::constants::TEMP_FILE_SUFFIX,
+        crate::shared::constants::TEMP_FILE_SUFFIX,
         unique_suffix()
     ));
 

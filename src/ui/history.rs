@@ -1,4 +1,4 @@
-use crate::constants;
+use crate::shared::constants;
 use std::path::{Path, PathBuf};
 
 const HISTORY_FILE: &str = ".togi_history";

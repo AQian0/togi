@@ -8,7 +8,7 @@
 //! - [`render`]：帧渲染与 CJK 折行。
 //! - [`summarize`]：工具调用参数的简短摘要，用于对话区展示。
 
-use crate::error::{ErrorKind, TogiError};
+use crate::shared::error::{ErrorKind, TogiError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum UiError {

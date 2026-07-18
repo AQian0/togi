@@ -1,4 +1,4 @@
-use crate::constants;
+use crate::shared::constants;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc;
 

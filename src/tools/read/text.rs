@@ -1,5 +1,5 @@
 use super::{Read, ReadError, io};
-use crate::common::{format_size, streaming_read_text_with_encoding, truncation_notice};
+use crate::shared::util::{format_size, streaming_read_text_with_encoding, truncation_notice};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -37,7 +37,7 @@ pub(super) async fn read_streaming(
     let mut effective_offset = offset_bytes;
     if offset_bytes == 0
         && let Ok(head) = io::read_chunk(path, 0, 4).await
-        && let Some((bom_encoding, bom_len)) = crate::text_encoding::encoding_for_bom(&head)
+        && let Some((bom_encoding, bom_len)) = crate::shared::text_encoding::encoding_for_bom(&head)
         && std::ptr::eq(bom_encoding, encoding)
     {
         effective_offset = bom_len as u64;

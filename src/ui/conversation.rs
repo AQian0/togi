@@ -1,4 +1,4 @@
-use crate::constants;
+use crate::shared::constants;
 use crate::ui::markdown;
 use crate::ui::style;
 use crate::ui::{OutputItem, SectionKind};
@@ -436,7 +436,7 @@ fn block_error() -> BlockStyle {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::ErrorKind;
+    use crate::shared::error::ErrorKind;
     use crate::ui::style;
     use crate::ui::{ErrorInfo, OutputItem};
 

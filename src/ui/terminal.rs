@@ -3,7 +3,7 @@
 //! - [`TerminalModeGuard`]：管理 raw mode、alternate screen、bracketed paste 和
 //!   鼠标捕获的进入与退出（RAII）。
 //! - [`EventPump`]：后台线程轮询 crossterm 事件并通过 channel 发送。
-use crate::constants;
+use crate::shared::constants;
 use ratatui::crossterm::event::{self, Event};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{

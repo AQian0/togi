@@ -1,7 +1,7 @@
 use super::{Modify, ModifyError};
-use crate::common::append_diff;
-use crate::constants;
-use crate::text_encoding::{decode_text, encode_text};
+use crate::shared::util::append_diff;
+use crate::shared::constants;
+use crate::shared::text_encoding::{decode_text, encode_text};
 use itertools::Itertools;
 use similar::{DiffOp, TextDiff};
 use std::path::Path;
@@ -266,7 +266,7 @@ pub(super) async fn edit_file(
         });
     }
 
-    crate::common::check_file_size(display, metadata.len())?;
+    crate::shared::util::check_file_size(display, metadata.len())?;
 
     let perms = metadata.permissions();
     let mtime_before = metadata.modified().ok();

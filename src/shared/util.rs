@@ -1,7 +1,7 @@
 //! 跨模块公共辅助函数：路径解析、参数解析、IO 错误分类、大文件支持。
 
-use crate::constants;
-use crate::error::{ErrorKind as TogiErrorKind, TogiError};
+use crate::shared::constants;
+use crate::shared::error::{ErrorKind as TogiErrorKind, TogiError};
 use rig::tool::ToolError;
 use serde_json::{Map, Value};
 use std::io::ErrorKind;
@@ -93,8 +93,8 @@ pub(crate) fn resolve_tool_path(
     "`{path}` is {size} which exceeds the maximum allowed size of {max}. \
      Use the `shell` tool with commands like `head`, `tail`, `sed`, or `xxd` \
      to work with this file instead.",
-    size = crate::common::format_size(*size),
-    max = crate::common::format_size(*max)
+    size = crate::shared::util::format_size(*size),
+    max = crate::shared::util::format_size(*max)
 )]
 pub struct FileTooLargeError {
     pub path: String,
@@ -115,8 +115,8 @@ impl TogiError for FileTooLargeError {
         crate::t!(
             "error-file-too-large",
             path = self.path.clone(),
-            size = crate::common::format_size(self.size),
-            max = crate::common::format_size(self.max)
+            size = crate::shared::util::format_size(self.size),
+            max = crate::shared::util::format_size(self.max)
         )
     }
 }
@@ -194,7 +194,7 @@ pub(crate) async fn streaming_read_text_with_encoding(
         return Ok((text, file_size, was_truncated));
     }
 
-    let text = crate::text_encoding::decode_text_without_bom(&buf, encoding)
+    let text = crate::shared::text_encoding::decode_text_without_bom(&buf, encoding)
         .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
     Ok((text, file_size, was_truncated))
 }
@@ -212,7 +212,7 @@ pub(crate) fn is_binary(data: &[u8]) -> bool {
     }
 
     // BOM 检测：避免 UTF-8/UTF-16 等编码因高位零字节被误判为二进制。
-    if crate::text_encoding::encoding_for_bom(data).is_some() {
+    if crate::shared::text_encoding::encoding_for_bom(data).is_some() {
         return false;
     }
 

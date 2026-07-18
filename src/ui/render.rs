@@ -3,7 +3,7 @@
 //! 负责将对话行序列渲染为 ratatui 帧，包括折行、CJK 宽度计算、
 //! 块样式竖条与背景填充、滚动偏移处理等。
 
-use crate::constants;
+use crate::shared::constants;
 use crate::ui::conversation::{Align, BlockStyle};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};

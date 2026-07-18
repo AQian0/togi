@@ -3,7 +3,7 @@
 //! 包含全部四种风味：Latte、Frappe、Macchiato、Mocha。
 //! 默认使用 Latte。
 
-use crate::error::{ErrorKind, TogiError};
+use crate::shared::error::{ErrorKind, TogiError};
 use ratatui::style::Color;
 use std::str::FromStr;
 use std::sync::LazyLock;

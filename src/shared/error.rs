@@ -29,7 +29,7 @@ pub enum ErrorKind {
 
 /// 项目内部错误的稳定语义接口。
 ///
-/// 约定（见 [crate::error] 模块文档）：
+/// 约定（见 [crate::shared::error] 模块文档）：
 /// - `Display`：面向 LLM 的英文技术描述。
 /// - [`TogiError::user_message`]：面向终端用户的本地化消息。
 /// - `code` / `kind`：稳定分类，供 UI、日志、重试策略使用。

@@ -1,7 +1,7 @@
 use super::ShellError;
 use super::capture::{self, StreamCapture, StreamChunk};
 use super::{process, render};
-use crate::constants;
+use crate::shared::constants;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;

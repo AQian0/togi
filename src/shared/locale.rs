@@ -38,8 +38,8 @@ const AVAILABLE_TAGS: &[&str] = &["zh-CN", "en"];
 /// 按 locale tag 获取编译期嵌入的 FTL 源文本。未匹配返回 `None`。
 fn ftl_for_tag(tag: &str) -> Option<&'static str> {
     match tag {
-        "zh-CN" => Some(include_str!("../locales/zh-CN/main.ftl")),
-        "en" => Some(include_str!("../locales/en/main.ftl")),
+        "zh-CN" => Some(include_str!("../../locales/zh-CN/main.ftl")),
+        "en" => Some(include_str!("../../locales/en/main.ftl")),
         _ => None,
     }
 }

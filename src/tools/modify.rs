@@ -1,8 +1,8 @@
-use crate::common::{
+use crate::shared::util::{
     FileTooLargeError, IoErrorClass, ToolPathError, classify_io_error, resolve_tool_path,
 };
-use crate::error::{ErrorKind, TogiError};
-use crate::text_encoding::{TextEncodingError, encoding_from_label};
+use crate::shared::error::{ErrorKind, TogiError};
+use crate::shared::text_encoding::{TextEncodingError, encoding_from_label};
 use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -228,8 +228,8 @@ impl TogiError for ModifyError {
             Self::FileTooLarge(err) => crate::t!(
                 "error-file-too-large",
                 path = err.path.clone(),
-                size = crate::common::format_size(err.size),
-                max = crate::common::format_size(err.max)
+                size = crate::shared::util::format_size(err.size),
+                max = crate::shared::util::format_size(err.max)
             ),
             Self::Io { path, source } => crate::t!(
                 "error-modify-io",

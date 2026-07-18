@@ -3,8 +3,8 @@
 //! 将会话消息以 JSON 序列化形式存入本地 SQLite 数据库，实现跨会话恢复。
 //! 仅在启用历史恢复功能时使用；数据库不可用时静默降级为纯内存模式。
 
-use crate::constants;
-use crate::error::{ErrorKind, TogiError};
+use crate::shared::constants;
+use crate::shared::error::{ErrorKind, TogiError};
 use rig::message::Message;
 use std::future::Future;
 use std::path::{Path, PathBuf};
