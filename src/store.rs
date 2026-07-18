@@ -315,7 +315,7 @@ impl HistoryStore {
     }
 
     async fn do_create_session(&self, title: &str) -> Result<String, StoreError> {
-        let id = uuid_v4();
+        let id = uuid::Uuid::new_v4().simple().to_string();
         self.conn
             .execute(
                 "INSERT INTO sessions (id, title, updated_at) VALUES (?1, ?2, datetime('now'))",
@@ -401,39 +401,6 @@ pub fn default_db_path() -> Option<PathBuf> {
 /// 唯一 ID 生成逻辑。
 pub fn default_session_id() -> &'static str {
     constants::DEFAULT_SESSION_ID
-}
-
-/// 生成 RFC 4122 v4 UUID（不带连字符，小写十六进制）。
-fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let nanos = now.subsec_nanos();
-    let secs = now.as_secs();
-    // 基于时间戳 + 随机数生成简单 UUID，避免引入外部依赖。
-    let mut buf = format!("{secs:08x}{nanos:08x}");
-    let mut rng = nanos as u64;
-    for _ in 0..16 {
-        rng = rng
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        buf.push_str(&format!("{:02x}", (rng >> 32) as u8));
-    }
-    // 设置 version 4 和 variant bits。
-    let mut bytes = hex_to_bytes(&buf);
-    if bytes.len() >= 8 {
-        bytes[6] = (bytes[6] & 0x0f) | 0x40;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    }
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn hex_to_bytes(hex: &str) -> Vec<u8> {
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0))
-        .collect()
 }
 
 #[cfg(test)]
