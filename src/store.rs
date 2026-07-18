@@ -388,16 +388,19 @@ impl MessageStore for HistoryStore {
 
 /// 计算默认数据库文件路径。
 ///
-/// 优先取 `TOGI_DB` 环境变量；否则放在 `~/.config/togi/`（Windows 下为
-/// 标准配置目录的 `togi/` 子目录）。返回 `None` 表示无法确定路径，
-/// 此时应用应静默降级为纯内存模式。
+/// 优先取 `TOGI_DB` 环境变量；否则使用 `dirs::data_dir()` 的平台推荐
+/// 数据目录下的 `togi/` 子目录：
+/// - Linux: `~/.local/share/togi/`
+/// - macOS: `~/Library/Application Support/togi/`
+/// - Windows: `%APPDATA%\togi\`
+/// 返回 `None` 表示无法确定路径，此时应用应静默降级为纯内存模式。
 pub fn default_db_path() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os(constants::ENV_DB_PATH)
         && !path.is_empty()
     {
         return Some(PathBuf::from(path));
     }
-    let base = dirs::config_dir()?;
+    let base = dirs::data_dir()?;
     Some(base.join(constants::APP_DIR_NAME).join(constants::DB_FILENAME))
 }
 
