@@ -42,6 +42,7 @@ builtins-session-ambiguous = 会话 ID `{ $input }` 匹配到多个会话，请�
 
 # ── App ──────────────────────────────────────────────────────────────
 app-cancelled = 已取消。
+app-busy = 上一条消息仍在处理中，本次提交已被忽略。
 app-session-error = Session 错误：{ $error }
 app-history-save-error = 无法保存输入历史：{ $error }
 

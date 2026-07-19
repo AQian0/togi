@@ -42,6 +42,7 @@ builtins-session-ambiguous = Session ID `{ $input }` matches multiple sessions, 
 
 # ── App ──────────────────────────────────────────────────────────────
 app-cancelled = Cancelled.
+app-busy = Previous message is still being processed; this submission was ignored.
 app-session-error = Session error: { $error }
 app-history-save-error = Could not save input history: { $error }
 

@@ -17,6 +17,7 @@ use rig::providers::deepseek::DEEPSEEK_V4_PRO;
 use rig::tool::ToolDyn;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{RwLock, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -33,6 +34,7 @@ struct AppController {
     registry: Arc<ToolRegistry>,
     cancel_tx: watch::Sender<bool>,
     task_cancel: CancellationToken,
+    submitting: Arc<AtomicBool>,
 }
 
 impl AppController {
@@ -53,13 +55,27 @@ impl AppController {
             registry,
             cancel_tx,
             task_cancel,
+            submitting: Arc::new(AtomicBool::new(false)),
         }
     }
 
     fn spawn_submission(&self, message: String, tx: UiSender) {
+        // 防御深度：UI 层已用 Session::submitting 串行化提交，此处兜底——
+        // 防止未来绕过 UI 的调用路径导致两个 handle_submission 并发竞争
+        // history / session_id。
+        // ponytail: 若 handle_submission panic，Done 与原子位同时卡住，
+        // 会话本已不可用，故不做 panic 安全复位。
+        if self.submitting.swap(true, Ordering::AcqRel) {
+            let _ = tx.send(OutputItem::Notice(crate::t!("app-busy")));
+            // 必须补发 Done：UI 在 Enter 时已置 submitting=true，靠 Done 复位。
+            let _ = tx.send(OutputItem::Done);
+            return;
+        }
         let this = self.clone();
         tokio::spawn(async move {
+            let submitting = Arc::clone(&this.submitting);
             this.handle_submission(message, tx).await;
+            submitting.store(false, Ordering::Release);
         });
     }
 
