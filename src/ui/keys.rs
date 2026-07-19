@@ -4,6 +4,7 @@
 //! 通过独立的 `impl Session` 块直接访问 Session 的 `pub(crate)` 字段。
 
 use crate::shared::constants;
+use crate::ui::complete::{self, TabCompletion};
 use crate::ui::session::Session;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
@@ -24,6 +25,10 @@ pub(crate) fn is_exit_command(input: &str) -> bool {
 impl Session {
     /// 处理单个按键事件，返回建议的后续动作和可选的要提交的消息文本。
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> (Action, Option<String>) {
+        // 任何非 Tab 键都会中断循环补全状态。
+        if key.code != KeyCode::Tab {
+            self.tab_completion = None;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -104,7 +109,7 @@ impl Session {
             KeyCode::Char('w') if ctrl => self.editor.delete_word_left(),
             KeyCode::Char(_) if alt => {}
             KeyCode::Char(c) => self.editor.insert_char(c),
-            KeyCode::Tab => self.editor.insert_tab(),
+            KeyCode::Tab => self.complete_command(),
             KeyCode::Backspace => {
                 if ctrl || alt {
                     self.editor.delete_word_left();
@@ -146,5 +151,30 @@ impl Session {
             _ => {}
         }
         (Action::Continue, None)
+    }
+
+    /// Tab 补全内置命令：首个 Tab 计算候选并填入第一项，后续 Tab 循环切换。
+    /// 非命令上下文（非 `/` 开头或已输入参数）退化为插入空格。
+    fn complete_command(&mut self) {
+        if let Some(state) = &mut self.tab_completion {
+            state.index = (state.index + 1) % state.matches.len();
+            let next = state.matches[state.index];
+            self.editor.set_text(next);
+            return;
+        }
+        let text = self.editor.text();
+        if !complete::is_command_context(&text) {
+            self.editor.insert_tab();
+            return;
+        }
+        let matches = complete::candidates(&text);
+        match matches.len() {
+            0 => {}
+            1 => self.editor.set_text(matches[0]),
+            _ => {
+                self.editor.set_text(matches[0]);
+                self.tab_completion = Some(TabCompletion { matches, index: 0 });
+            }
+        }
     }
 }

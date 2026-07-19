@@ -85,6 +85,7 @@ impl ErrorInfo {
     }
 }
 
+pub(crate) mod complete;
 pub(crate) mod conversation;
 pub(crate) mod editor;
 pub(crate) mod history;

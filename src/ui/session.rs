@@ -30,6 +30,7 @@ pub struct Session {
     pub(crate) conv_scroll_offset: usize,
     pub(crate) cancel_tx: watch::Sender<bool>,
     pub(crate) last_ctrl_c: Option<Instant>,
+    pub(crate) tab_completion: Option<crate::ui::complete::TabCompletion>,
 }
 
 impl Session {
@@ -52,6 +53,7 @@ impl Session {
             conv_scroll_offset: 0,
             cancel_tx,
             last_ctrl_c: None,
+            tab_completion: None,
         })
     }
 
