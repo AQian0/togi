@@ -51,6 +51,7 @@ agent-unknown-provider = 无法识别模型 "{ $model }" 对应的提供商。�
 agent-missing-api-key = 未设置 { $env } 环境变量
 agent-provider-init = 无法初始化 { $provider } 提供商：{ $source }
 agent-stream-error = 模型流式响应失败：{ $source }
+agent-retrying = 请求失败，{ $delay } 秒后重试（第 { $attempt }/{ $max } 次）…
 
 # ── Summarize ────────────────────────────────────────────────────────
 summarize-write = 写入

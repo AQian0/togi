@@ -51,6 +51,7 @@ agent-unknown-provider = Could not identify the provider for model "{ $model }".
 agent-missing-api-key = { $env } environment variable not set
 agent-provider-init = Could not initialize { $provider } provider: { $source }
 agent-stream-error = Model streaming failed: { $source }
+agent-retrying = Request failed, retrying in { $delay }s (attempt { $attempt }/{ $max })…
 
 # ── Summarize ────────────────────────────────────────────────────────
 summarize-write = Write

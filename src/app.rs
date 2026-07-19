@@ -63,6 +63,19 @@ impl AppController {
         });
     }
 
+    /// 将当前历史落盘；存储不可用或保存失败时仅提示，不影响对话。
+    async fn persist_history(&self, session_id: &str, tx: &UiSender) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let hist = self.history.read().await;
+        if let Err(err) = store.save(session_id, &hist).await {
+            let _ = tx.send(OutputItem::Notice(
+                crate::t!("store-save-error", error = err.user_message()),
+            ));
+        }
+    }
+
     async fn handle_submission(self, message: String, tx: UiSender) {
         if message.starts_with('/') {
             // 记录命令前的会话 ID，用于检测是否发生了切换
@@ -122,18 +135,14 @@ impl AppController {
         match result {
             Ok(updated_history) => {
                 *self.history.write().await = Arc::from(updated_history);
-                if let Some(store) = &self.store {
-                    let hist = self.history.read().await;
-                    if let Err(err) = store.save(&session_id, &hist).await {
-                        let _ = tx.send(OutputItem::Notice(
-                            crate::t!("store-save-error", error = err.user_message()),
-                        ));
-                    }
-                }
+                self.persist_history(&session_id, &tx).await;
                 let _ = tx.send(OutputItem::Done);
             }
-            Err(err) => {
-                let _ = tx.send(OutputItem::Error(ErrorInfo::from_error(&err)));
+            Err(failure) => {
+                // 失败同样保留并落盘部分历史：已完成的工具往返对后续对话有效。
+                *self.history.write().await = Arc::from(failure.history);
+                self.persist_history(&session_id, &tx).await;
+                let _ = tx.send(OutputItem::Error(ErrorInfo::from_error(&failure.source)));
                 let _ = tx.send(OutputItem::Done);
             }
         }

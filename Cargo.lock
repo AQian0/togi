@@ -8684,6 +8684,7 @@ dependencies = [
  "encoding_rs",
  "fluent",
  "futures",
+ "http 1.4.2",
  "itertools 0.14.0",
  "libc",
  "pretty_assertions",

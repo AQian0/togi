@@ -5,12 +5,14 @@ use rig::agent::MultiTurnStreamItem;
 use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::CompletionModel;
 use rig::completion::message::ToolResultContent;
-use rig::message::Message;
+use rig::message::{AssistantContent, Message, Reasoning, Text, ToolCall, ToolResult, UserContent};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use rig::tool::ToolDyn;
+use rig::OneOrMany;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
 
 #[derive(Debug, thiserror::Error)]
@@ -92,6 +94,19 @@ pub enum AgentSection {
     Answer,
 }
 
+/// 一轮对话失败：错误本身 + 失败前已产生的部分历史。
+///
+/// `history` 保留已完成的工具往返与已生成的文本（零进展时等于原历史），
+/// 避免工具副作用已写入磁盘、而模型上下文里这一轮凭空消失的状态不一致。
+#[derive(Debug)]
+pub struct TurnFailure {
+    pub source: AgentError,
+    pub history: Vec<Message>,
+    /// 是否已产生过任何流式内容（含后来被丢弃的悬空工具调用——
+    /// 其副作用可能已发生，故不可安全重试）。
+    made_progress: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     Section(AgentSection),
@@ -113,14 +128,149 @@ pub enum AgentEvent {
 }
 
 type AgentEventSender = tokio::sync::mpsc::UnboundedSender<AgentEvent>;
-type ChatFuture = Pin<Box<dyn Future<Output = Result<Vec<Message>, AgentError>> + Send>>;
+type ChatFuture = Pin<Box<dyn Future<Output = Result<Vec<Message>, TurnFailure>> + Send>>;
 type ChatFn = dyn Fn(String, Arc<[Message]>, AgentEventSender, watch::Receiver<bool>, u32) -> ChatFuture
     + Send
     + Sync;
 
-fn cancel_return(tx: &AgentEventSender, history: &Arc<[Message]>) -> Vec<Message> {
+/// 流式过程中累积本轮新产生的消息，供取消 / 出错时收尾成合法历史。
+#[derive(Default)]
+struct PartialTurn {
+    /// 推理增量缓冲：`ReasoningDelta` 只给字符串，提交时合并为一条 [`Reasoning`]。
+    reasoning: String,
+    /// 当前未提交的 assistant 内容。
+    assistant: Vec<AssistantContent>,
+    /// 本批次已到达的工具结果。与 rig 的规范历史对齐：同一批调用的所有
+    /// result 合并为一条 user 消息（provider 对并行调用的要求）。
+    results: Vec<UserContent>,
+    /// 已提交的新消息：assistant（含工具调用）与 tool result 用户消息严格成对交替。
+    committed: Vec<Message>,
+    /// 是否收到过任何内容（含后来被丢弃的悬空工具调用）。
+    touched: bool,
+}
+
+impl PartialTurn {
+    fn push_reasoning_delta(&mut self, delta: &str) {
+        self.touched = true;
+        self.flush_results();
+        self.reasoning.push_str(delta);
+    }
+
+    fn push_reasoning(&mut self, reasoning: Reasoning) {
+        self.touched = true;
+        self.flush_results();
+        self.flush_reasoning();
+        self.assistant.push(AssistantContent::Reasoning(reasoning));
+    }
+
+    fn push_text(&mut self, text: String) {
+        self.touched = true;
+        self.flush_results();
+        self.flush_reasoning();
+        self.assistant.push(AssistantContent::Text(Text::new(text)));
+    }
+
+    fn push_tool_call(&mut self, tool_call: ToolCall) {
+        self.touched = true;
+        self.flush_results();
+        self.flush_reasoning();
+        self.assistant.push(AssistantContent::ToolCall(tool_call));
+    }
+
+    fn push_tool_result(&mut self, tool_result: ToolResult) {
+        self.touched = true;
+        self.commit_assistant();
+        self.results.push(UserContent::ToolResult(tool_result));
+    }
+
+    fn flush_reasoning(&mut self) {
+        if !self.reasoning.is_empty() {
+            self.assistant
+                .push(AssistantContent::Reasoning(Reasoning::new(&self.reasoning)));
+            self.reasoning.clear();
+        }
+    }
+
+    fn flush_results(&mut self) {
+        if self.results.is_empty() {
+            return;
+        }
+        let content =
+            OneOrMany::many(std::mem::take(&mut self.results)).expect("results non-empty");
+        self.committed.push(Message::User { content });
+    }
+
+    fn commit_assistant(&mut self) {
+        self.flush_reasoning();
+        if self.assistant.is_empty() {
+            return;
+        }
+        let content =
+            OneOrMany::many(std::mem::take(&mut self.assistant)).expect("assistant content non-empty");
+        self.committed.push(Message::Assistant { id: None, content });
+    }
+
+    /// 收尾为完整历史：原历史 + 用户输入 + 本轮新消息；零进展时原样返回。
+    ///
+    /// 未拿到结果的悬空工具调用会被丢弃——多数 provider 拒绝存在
+    /// tool call 而无对应 result 的历史。
+    fn finish(mut self, input: &str, history: &[Message]) -> Vec<Message> {
+        while matches!(self.assistant.last(), Some(AssistantContent::ToolCall(_))) {
+            self.assistant.pop();
+        }
+        self.commit_assistant();
+        self.flush_results();
+        if self.committed.is_empty() {
+            return history.to_vec();
+        }
+        let mut out = history.to_vec();
+        out.push(Message::user(input));
+        out.extend(self.committed);
+        out
+    }
+}
+
+/// 提取 rig 错误自带的规范历史（如 `MaxTurnsError` / `PromptCancelled`），
+/// 存在时优先于本地重建。
+fn canonical_history(err: &rig::agent::StreamingError) -> Option<Vec<Message>> {
+    let rig::agent::StreamingError::Prompt(e) = err else {
+        return None;
+    };
+    match &**e {
+        rig::completion::PromptError::MaxTurnsError { chat_history, .. }
+        | rig::completion::PromptError::UnknownToolCall { chat_history, .. } => {
+            Some((**chat_history).clone())
+        }
+        rig::completion::PromptError::PromptCancelled { chat_history, .. } => {
+            Some(chat_history.clone())
+        }
+        _ => None,
+    }
+}
+
+/// 判断是否为可重试的瞬态错误：HTTP 429 / 5xx，或无状态码的传输层失败
+/// （连接错误、超时等）。
+fn is_transient(err: &AgentError) -> bool {
+    let AgentError::Stream { source } = err else {
+        return false;
+    };
+    let rig::agent::StreamingError::Completion(e) = source else {
+        return false;
+    };
+    match e.provider_response_status() {
+        Some(status) => status.as_u16() == 429 || status.is_server_error(),
+        None => matches!(e, rig::completion::CompletionError::HttpError(_)),
+    }
+}
+
+fn cancel_return(
+    tx: &AgentEventSender,
+    input: &str,
+    history: &[Message],
+    partial: PartialTurn,
+) -> Vec<Message> {
     let _ = tx.send(AgentEvent::Notice(crate::t!("agent-esc-interrupted")));
-    history.to_vec()
+    partial.finish(input, history)
 }
 
 fn ensure_section(current: &mut AgentSection, target: AgentSection, tx: &AgentEventSender) {
@@ -129,6 +279,9 @@ fn ensure_section(current: &mut AgentSection, target: AgentSection, tx: &AgentEv
         let _ = tx.send(AgentEvent::Section(target));
     }
 }
+/// 最大尝试次数（含首次请求）。
+const MAX_ATTEMPTS: u32 = 3;
+
 pub async fn stream_chat<M: CompletionModel + 'static>(
     agent: &rig::agent::Agent<M>,
     input: &str,
@@ -136,8 +289,52 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
     tx: AgentEventSender,
     mut cancel_rx: watch::Receiver<bool>,
     max_multi_turn: u32,
-) -> Result<Vec<Message>, AgentError> {
+) -> Result<Vec<Message>, TurnFailure> {
+    let mut attempt = 1;
+    loop {
+        match stream_once(agent, input, history, &tx, &mut cancel_rx, max_multi_turn).await {
+            Ok(updated) => return Ok(updated),
+            Err(failure) => {
+                // 仅在零进展（未收到任何内容，重试不会造成重复输出或重复
+                // 副作用）且为瞬态错误时重试。ponytail: 多轮工具循环中途的
+                // 请求失败不重试——那需要区分 rig 内部的请求边界，等有实际
+                // 需求再做。
+                if attempt >= MAX_ATTEMPTS
+                    || failure.made_progress
+                    || !is_transient(&failure.source)
+                {
+                    return Err(failure);
+                }
+                let delay = Duration::from_secs(1 << (attempt - 1));
+                let _ = tx.send(AgentEvent::Notice(crate::t!(
+                    "agent-retrying",
+                    attempt = attempt + 1,
+                    max = MAX_ATTEMPTS,
+                    delay = delay.as_secs()
+                )));
+                attempt += 1;
+                tokio::select! {
+                    biased;
+                    _ = cancel_rx.changed() => {
+                        return Ok(cancel_return(&tx, input, history, PartialTurn::default()));
+                    }
+                    _ = tokio::time::sleep(delay) => {}
+                }
+            }
+        }
+    }
+}
+
+async fn stream_once<M: CompletionModel + 'static>(
+    agent: &rig::agent::Agent<M>,
+    input: &str,
+    history: &[Message],
+    tx: &AgentEventSender,
+    cancel_rx: &mut watch::Receiver<bool>,
+    max_multi_turn: u32,
+) -> Result<Vec<Message>, TurnFailure> {
     let mut section = AgentSection::Answer;
+    let mut partial = PartialTurn::default();
     let mut final_history: Option<Vec<Message>> = None;
     let stream_request = agent
         .stream_prompt(input)
@@ -145,33 +342,37 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
         .max_turns(max_multi_turn as usize);
     let mut stream = tokio::select! {
         biased;
-        _ = cancel_rx.changed() => return Ok(cancel_return(&tx, history)),
+        _ = cancel_rx.changed() => return Ok(cancel_return(tx, input, history, partial)),
         stream = stream_request => stream,
     };
     loop {
         let item = tokio::select! {
             biased;
-            _ = cancel_rx.changed() => return Ok(cancel_return(&tx, history)),
+            _ = cancel_rx.changed() => return Ok(cancel_return(tx, input, history, partial)),
             item = stream.next() => item,
         };
         match item {
             Some(Ok(MultiTurnStreamItem::StreamAssistantItem(content))) => match content {
                 StreamedAssistantContent::Reasoning(reasoning) => {
-                    ensure_section(&mut section, AgentSection::Reasoning, &tx);
+                    ensure_section(&mut section, AgentSection::Reasoning, tx);
                     let _ = tx.send(AgentEvent::Text(reasoning.display_text().clone()));
+                    partial.push_reasoning(reasoning);
                 }
                 StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
-                    ensure_section(&mut section, AgentSection::Reasoning, &tx);
+                    ensure_section(&mut section, AgentSection::Reasoning, tx);
+                    partial.push_reasoning_delta(&reasoning);
                     let _ = tx.send(AgentEvent::Text(reasoning));
                 }
                 StreamedAssistantContent::Text(text) => {
-                    ensure_section(&mut section, AgentSection::Answer, &tx);
+                    ensure_section(&mut section, AgentSection::Answer, tx);
+                    partial.push_text(text.text.clone());
                     let _ = tx.send(AgentEvent::Text(text.text));
                 }
                 StreamedAssistantContent::ToolCall {
                     tool_call,
                     internal_call_id,
                 } => {
+                    partial.push_tool_call(tool_call.clone());
                     let _ = tx.send(AgentEvent::ToolCall {
                         name: tool_call.function.name,
                         arguments: tool_call.function.arguments,
@@ -189,6 +390,7 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                 tool_result,
                 internal_call_id,
             }))) => {
+                partial.push_tool_result(tool_result.clone());
                 let text: String = tool_result
                     .content
                     .iter()
@@ -209,12 +411,21 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
             }
             Some(Ok(_)) => {}
             Some(Err(err)) => {
-                return Err(AgentError::Stream { source: err });
+                let made_progress = partial.touched;
+                let history = match canonical_history(&err) {
+                    Some(h) => h,
+                    None => partial.finish(input, history),
+                };
+                return Err(TurnFailure {
+                    history,
+                    made_progress,
+                    source: AgentError::Stream { source: err },
+                });
             }
             None => break,
         }
     }
-    Ok(final_history.unwrap_or_else(|| history.to_vec()))
+    Ok(final_history.unwrap_or_else(|| partial.finish(input, history)))
 }
 
 pub struct DynamicAgent {
@@ -229,7 +440,7 @@ impl DynamicAgent {
         history: Arc<[Message]>,
         tx: AgentEventSender,
         cancel_rx: watch::Receiver<bool>,
-    ) -> Result<Vec<Message>, AgentError> {
+    ) -> Result<Vec<Message>, TurnFailure> {
         (self.chat)(
             input.to_string(),
             history,
@@ -377,6 +588,214 @@ providers! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rig::message::{ToolFunction, ToolResultContent};
+
+    fn tool_call(id: &str, name: &str) -> ToolCall {
+        ToolCall::new(
+            id.into(),
+            ToolFunction::new(name.into(), serde_json::json!({})),
+        )
+    }
+
+    fn tool_result(id: &str, text: &str) -> ToolResult {
+        ToolResult {
+            id: id.into(),
+            call_id: None,
+            content: OneOrMany::one(ToolResultContent::Text(Text::new(text))),
+        }
+    }
+
+    fn stream_err(status: http::StatusCode) -> AgentError {
+        AgentError::Stream {
+            source: rig::agent::StreamingError::Completion(
+                rig::completion::CompletionError::from_http_response(status, "boom"),
+            ),
+        }
+    }
+
+    #[test]
+    fn finish_without_progress_returns_history_unchanged() {
+        let history = vec![Message::user("hi")];
+        let out = PartialTurn::default().finish("hello", &history);
+        assert_eq!(out, history);
+    }
+
+    #[test]
+    fn finish_with_text_appends_input_and_assistant() {
+        let mut p = PartialTurn::default();
+        p.push_text("正在处理".into());
+        let out = p.finish("做点事", &[]);
+        assert_eq!(out.len(), 2);
+        assert!(matches!(&out[0], Message::User { .. }));
+        let Message::Assistant { content, .. } = &out[1] else {
+            panic!("expected assistant message");
+        };
+        assert!(
+            content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::Text(t) if t.text == "正在处理"))
+        );
+    }
+
+    #[test]
+    fn finish_preserves_completed_tool_pair() {
+        let mut p = PartialTurn::default();
+        p.push_tool_call(tool_call("call-1", "read"));
+        p.push_tool_result(tool_result("call-1", "文件内容"));
+        p.push_text("读完了".into());
+        let out = p.finish("读文件", &[]);
+        // input + assistant(tool call) + user(result) + assistant(text)
+        assert_eq!(out.len(), 4);
+        let Message::Assistant { content, .. } = &out[1] else {
+            panic!("expected assistant message");
+        };
+        assert!(
+            content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::ToolCall(_)))
+        );
+        let Message::User { content } = &out[2] else {
+            panic!("expected user message");
+        };
+        assert!(
+            content
+                .iter()
+                .any(|c| matches!(c, UserContent::ToolResult(r) if r.id == "call-1"))
+        );
+    }
+
+    #[test]
+    fn finish_strips_dangling_tool_call() {
+        let mut p = PartialTurn::default();
+        p.push_text("我查一下".into());
+        p.push_tool_call(tool_call("call-1", "shell"));
+        // 取消 / 出错发生在工具结果返回前
+        let out = p.finish("跑个命令", &[]);
+        assert_eq!(out.len(), 2);
+        let Message::Assistant { content, .. } = &out[1] else {
+            panic!("expected assistant message");
+        };
+        assert!(
+            !content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::ToolCall(_)))
+        );
+        assert!(
+            content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::Text(t) if t.text == "我查一下"))
+        );
+    }
+
+    #[test]
+    fn finish_drops_turn_containing_only_dangling_call() {
+        let mut p = PartialTurn::default();
+        p.push_tool_call(tool_call("call-1", "shell"));
+        let out = p.finish("跑个命令", &[]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn finish_batches_parallel_results_into_single_user_message() {
+        let mut p = PartialTurn::default();
+        p.push_tool_call(tool_call("call-1", "read"));
+        p.push_tool_call(tool_call("call-2", "read"));
+        p.push_tool_result(tool_result("call-1", "内容一"));
+        p.push_tool_result(tool_result("call-2", "内容二"));
+        let out = p.finish("读两个文件", &[]);
+        // input + assistant(两个 call) + 一条 user(两个 result 合并)
+        assert_eq!(out.len(), 3);
+        let Message::Assistant { content, .. } = &out[1] else {
+            panic!("expected assistant message");
+        };
+        assert_eq!(
+            content
+                .iter()
+                .filter(|c| matches!(c, AssistantContent::ToolCall(_)))
+                .count(),
+            2
+        );
+        let Message::User { content } = &out[2] else {
+            panic!("expected user message");
+        };
+        assert_eq!(
+            content
+                .iter()
+                .filter(|c| matches!(c, UserContent::ToolResult(_)))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn dangling_call_marks_progress_despite_unchanged_history() {
+        let mut p = PartialTurn::default();
+        assert!(!p.touched);
+        p.push_tool_call(tool_call("call-1", "shell"));
+        // 悬空调用被丢弃、历史不变，但已产生过内容——不可安全重试
+        assert!(p.touched);
+    }
+
+    #[test]
+    fn canonical_history_extracted_from_max_turns_error() {
+        let err = rig::agent::StreamingError::Prompt(Box::new(
+            rig::completion::PromptError::MaxTurnsError {
+                max_turns: 10,
+                chat_history: vec![Message::user("q"), Message::assistant("a")].into(),
+                prompt: Message::user("q").into(),
+            },
+        ));
+        let history = canonical_history(&err).expect("should extract canonical history");
+        assert_eq!(history, vec![Message::user("q"), Message::assistant("a")]);
+    }
+
+    #[test]
+    fn canonical_history_returns_none_for_completion_error() {
+        let err = rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::from_http_response(
+                http::StatusCode::TOO_MANY_REQUESTS,
+                "boom",
+            ),
+        );
+        assert!(canonical_history(&err).is_none());
+    }
+
+    #[test]
+    fn reasoning_deltas_merge_into_single_reasoning_before_text() {
+        let mut p = PartialTurn::default();
+        p.push_reasoning_delta("先想");
+        p.push_reasoning_delta("一下");
+        p.push_text("答案".into());
+        let out = p.finish("问", &[]);
+        let Message::Assistant { content, .. } = &out[1] else {
+            panic!("expected assistant message");
+        };
+        let items: Vec<&AssistantContent> = content.iter().collect();
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], AssistantContent::Reasoning(_)));
+        assert!(matches!(items[1], AssistantContent::Text(_)));
+    }
+
+    #[test]
+    fn transient_statuses_are_retryable() {
+        assert!(is_transient(&stream_err(http::StatusCode::TOO_MANY_REQUESTS)));
+        assert!(is_transient(&stream_err(
+            http::StatusCode::SERVICE_UNAVAILABLE
+        )));
+        assert!(is_transient(&stream_err(
+            http::StatusCode::INTERNAL_SERVER_ERROR
+        )));
+    }
+
+    #[test]
+    fn client_errors_are_not_retryable() {
+        assert!(!is_transient(&stream_err(http::StatusCode::BAD_REQUEST)));
+        assert!(!is_transient(&stream_err(http::StatusCode::UNAUTHORIZED)));
+        assert!(!is_transient(&AgentError::UnknownProvider {
+            model: "x".into(),
+            supported: "y".into(),
+        }));
+    }
 
     #[test]
     fn resolve_deepseek() {

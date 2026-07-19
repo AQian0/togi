@@ -16,6 +16,7 @@ path = "tests/integration.rs"
 pretty_assertions = "1.4"
 rstest = "0.26"
 tempfile = "3.22"
+http = "1"
 
 [dependencies]
 arboard = "3.6.1"
