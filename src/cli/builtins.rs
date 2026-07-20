@@ -71,10 +71,7 @@ pub async fn handle_command(
                 send_notice(&tx, &crate::t!("builtins-history-title", count = total));
                 for (i, msg) in guard.iter().enumerate() {
                     let (role, preview) = message_summary(msg);
-                    send_notice(
-                        &tx,
-                        &format!("  {:>3}  {:<10}{}", i + 1, role, preview),
-                    );
+                    send_notice(&tx, &format!("  {:>3}  {:<10}{}", i + 1, role, preview));
                 }
                 send_notice(&tx, "");
             }
@@ -145,11 +142,7 @@ pub async fn handle_command(
                             *session_id.write().await = Arc::from(target_sid.as_str());
                             send_notice(
                                 &tx,
-                                &crate::t!(
-                                    "builtins-switch-done",
-                                    id = target_sid,
-                                    count = count
-                                ),
+                                &crate::t!("builtins-switch-done", id = target_sid, count = count),
                             );
                         }
                         Err(err) => {
@@ -210,10 +203,7 @@ pub async fn handle_command(
                     }
                     match store.delete_session(&target_sid).await {
                         Ok(()) => {
-                            send_notice(
-                                &tx,
-                                &crate::t!("builtins-delete-done", id = target_sid),
-                            );
+                            send_notice(&tx, &crate::t!("builtins-delete-done", id = target_sid));
                         }
                         Err(err) => {
                             send_notice(
@@ -242,10 +232,7 @@ pub async fn handle_command(
 }
 
 /// 将会话编号（1-based）或会话 ID 解析为实际会话 ID。
-async fn resolve_session_id(
-    store: &Arc<dyn MessageStore>,
-    arg: &str,
-) -> Result<String, String> {
+async fn resolve_session_id(store: &Arc<dyn MessageStore>, arg: &str) -> Result<String, String> {
     // 如果是纯数字，按编号解析
     if let Ok(n) = arg.parse::<usize>() {
         if n == 0 {
@@ -293,7 +280,7 @@ fn message_summary(msg: &Message) -> (&'static str, String) {
                 match item {
                     UserContent::Text(t) => return ("user", truncate_preview(&t.text, 72)),
                     UserContent::ToolResult(_) => {
-                        return ("user", "[tool result]".to_string());
+                        return ("user", crate::t!("builtins-history-tool-result"));
                     }
                     _ => {}
                 }

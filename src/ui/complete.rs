@@ -4,7 +4,15 @@
 
 /// 所有可补全的内置命令（与 `cli::builtins` 的命令集保持一致）。
 pub(crate) const COMMANDS: &[&str] = &[
-    "/clear", "/cwd", "/delete", "/exit", "/help", "/history", "/new", "/quit", "/sessions",
+    "/clear",
+    "/cwd",
+    "/delete",
+    "/exit",
+    "/help",
+    "/history",
+    "/new",
+    "/quit",
+    "/sessions",
     "/switch",
 ];
 

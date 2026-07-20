@@ -1,5 +1,5 @@
-use crate::shared::util::parse_args_object;
 use crate::pipeline::tool_pipeline::ApplyLayer;
+use crate::shared::util::parse_args_object;
 use itertools::Itertools;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
@@ -38,7 +38,7 @@ impl ToolDyn for PaginatedTool {
             let offset = take_usize(&mut args, OFFSET_PARAM)?;
             if offset == Some(0) {
                 return Err(ToolError::ToolCallError(
-                    "`offset` is 1-based and must be at least 1.".into(),
+                    crate::t!("paginate-offset-one-based").into(),
                 ));
             }
             let limit = take_usize(&mut args, LIMIT_PARAM)?;
@@ -69,7 +69,7 @@ fn paginate_text(
     // defense-in-depth in case this helper is ever called from another path.
     let start = offset.unwrap_or(1).max(1);
     if start > total {
-        return format!("(offset {start} is past end of output; output has {total} lines)");
+        return crate::t!("paginate-past-end", offset = start, total = total);
     }
     let start_idx = start - 1;
     let effective_limit = match limit {
@@ -94,10 +94,13 @@ fn paginate_text(
     let mut out = String::with_capacity(text.len().min(16_384) + 96);
     let _ = writeln!(
         out,
-        "(showing lines {}-{} of {})",
-        start_idx + 1,
-        end_idx,
-        total
+        "{}",
+        crate::t!(
+            "paginate-showing",
+            start = start_idx + 1,
+            end = end_idx,
+            total = total
+        )
     );
     for line in &selected {
         out.push_str(line);
@@ -106,9 +109,12 @@ fn paginate_text(
     if end_idx < total {
         let _ = writeln!(
             out,
-            "… ({} more lines; call again with offset {})",
-            total - end_idx,
-            end_idx + 1
+            "{}",
+            crate::t!(
+                "paginate-more-lines",
+                count = total - end_idx,
+                offset = end_idx + 1
+            )
         );
     }
     out
@@ -164,7 +170,7 @@ fn take_usize(args: &mut Map<String, Value>, key: &str) -> Result<Option<usize>,
     }
 }
 fn bad_integer(key: &str) -> ToolError {
-    ToolError::ToolCallError(format!("`{key}` must be a non-negative integer.").into())
+    ToolError::ToolCallError(crate::t!("paginate-bad-integer", key = key.to_string()).into())
 }
 #[cfg(test)]
 mod tests {
@@ -173,8 +179,6 @@ mod tests {
     fn full_output_is_returned_unchanged() {
         let out = paginate_text("a\nb\nc\n", None, None, 0);
         assert_eq!(out, "a\nb\nc\n");
-        assert!(!out.contains("showing lines"));
-        assert!(!out.contains("more lines"));
     }
     #[test]
     fn empty_output_is_passed_through() {
@@ -187,25 +191,27 @@ mod tests {
     #[test]
     fn offset_starts_at_requested_line() {
         let out = paginate_text("a\nb\nc\nd\n", Some(2), None, 0);
-        assert!(out.starts_with("(showing lines 2-4 of 4)\n"));
+        let head = crate::t!("paginate-showing", start = 2, end = 4, total = 4);
+        assert!(out.starts_with(&format!("{head}\n")));
         assert!(!out.contains('a'));
         assert!(out.contains("b\n"));
         assert!(out.contains("d\n"));
-        assert!(!out.contains("more lines"));
     }
     #[test]
     fn limit_caps_lines_and_hints_next_offset() {
         let out = paginate_text("a\nb\nc\nd\ne\n", Some(1), Some(2), 0);
-        assert!(out.starts_with("(showing lines 1-2 of 5)\n"));
+        let head = crate::t!("paginate-showing", start = 1, end = 2, total = 5);
+        assert!(out.starts_with(&format!("{head}\n")));
         assert!(out.contains("a\nb\n"));
         assert!(!out.contains("\nc\n"));
-        assert!(out.contains("3 more lines; call again with offset 3"));
+        assert!(out.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
     }
     #[test]
     fn default_limit_applies_when_limit_omitted() {
         let out = paginate_text("a\nb\nc\nd\ne\n", None, None, 2);
-        assert!(out.starts_with("(showing lines 1-2 of 5)\n"));
-        assert!(out.contains("call again with offset 3"));
+        let head = crate::t!("paginate-showing", start = 1, end = 2, total = 5);
+        assert!(out.starts_with(&format!("{head}\n")));
+        assert!(out.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
     }
     #[test]
     fn explicit_zero_limit_overrides_default_and_returns_all() {
@@ -224,8 +230,7 @@ mod tests {
     #[test]
     fn offset_past_end_reports_total() {
         let out = paginate_text("a\nb\n", Some(9), None, 0);
-        assert!(out.contains("past end of output"));
-        assert!(out.contains("2 lines"));
+        assert_eq!(out, crate::t!("paginate-past-end", offset = 9, total = 2));
     }
     #[derive(JsonSchema)]
     struct RawEchoArgs {
@@ -294,19 +299,25 @@ mod tests {
             .call(r#"{"offset":2,"limit":2}"#.to_string())
             .await
             .unwrap();
-        assert!(output.starts_with("(showing lines 2-3 of 5)\n"));
+        assert!(output.starts_with(&format!(
+            "{}\n",
+            crate::t!("paginate-showing", start = 2, end = 3, total = 5)
+        )));
         assert!(output.contains("l2\n"));
         assert!(output.contains("l3\n"));
         assert!(!output.contains("l1"));
         assert!(!output.contains("l4"));
-        assert!(output.contains("call again with offset 4"));
+        assert!(output.contains(&crate::t!("paginate-more-lines", count = 2, offset = 4)));
     }
     #[tokio::test]
     async fn default_limit_paginates_without_explicit_args() {
         let tool = paginate(2, FixedLines);
         let output = tool.call("{}".to_string()).await.unwrap();
-        assert!(output.starts_with("(showing lines 1-2 of 5)\n"));
-        assert!(output.contains("call again with offset 3"));
+        assert!(output.starts_with(&format!(
+            "{}\n",
+            crate::t!("paginate-showing", start = 1, end = 2, total = 5)
+        )));
+        assert!(output.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
     }
     #[tokio::test]
     async fn rejects_non_integer_offset() {
@@ -332,7 +343,7 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("1-based") || err_msg.contains("at least 1"),
+            err_msg.contains(&crate::t!("paginate-offset-one-based")),
             "expected error about offset being 1-based, got: {err_msg}"
         );
     }

@@ -30,7 +30,7 @@ async fn call_should_create_text_file_when_content_is_provided() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("created"));
+    assert!(output.contains(&togi::t!("modify-action-created")));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world\n");
 }
 
@@ -46,7 +46,7 @@ async fn call_should_overwrite_existing_text_file() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("overwrote"));
+    assert!(output.contains(&togi::t!("modify-action-overwrote")));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
 }
 
@@ -62,8 +62,8 @@ async fn call_should_report_no_changes_when_overwriting_with_same_content() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("overwrote"));
-    assert!(output.contains("(no changes)"));
+    assert!(output.contains(&togi::t!("modify-action-overwrote")));
+    assert!(output.contains(&togi::t!("common-no-changes")));
     assert!(!output.contains("@@"));
 }
 
@@ -80,7 +80,7 @@ async fn call_should_include_diff_when_editing_text_file() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("edited"));
+    assert!(output.contains(&togi::t!("modify-replacements", count = 1)));
     assert!(output.contains("@@"));
     assert!(output.contains("-b\n"));
     assert!(output.contains("+B\n"));
@@ -97,7 +97,7 @@ async fn call_should_include_diff_when_creating_text_file() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("created"));
+    assert!(output.contains(&togi::t!("modify-action-created")));
     assert!(output.contains("--- /dev/null"));
     assert!(output.contains("@@ -0,0 +1,2 @@"));
     assert!(output.contains("+hello\n"));
@@ -117,8 +117,7 @@ async fn call_should_apply_single_unique_replacement() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("edited"));
-    assert!(output.contains("1 replacement"));
+    assert!(output.contains(&togi::t!("modify-replacements", count = 1)));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha BETA gamma");
 }
 
@@ -136,7 +135,7 @@ async fn call_should_combine_edits_array_with_single_old_text() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("2 replacements"));
+    assert!(output.contains(&togi::t!("modify-replacements", count = 2)));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "1 two 3");
 }
 
@@ -152,7 +151,7 @@ async fn call_should_report_deletion_when_new_text_is_omitted() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("1 deletion"));
+    assert!(output.contains(&togi::t!("modify-deletions", count = 1)));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep keep");
 }
 
@@ -171,8 +170,8 @@ async fn call_should_report_mixed_replacements_and_deletions() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("1 replacement"));
-    assert!(output.contains("1 deletion"));
+    assert!(output.contains(&togi::t!("modify-replacements", count = 1)));
+    assert!(output.contains(&togi::t!("modify-deletions", count = 1)));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "Apfel banana ");
 }
 
@@ -193,7 +192,7 @@ async fn call_should_edit_utf16le_bom_file_preserving_encoding() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("edited"));
+    assert!(output.contains(&togi::t!("modify-replacements", count = 1)));
     let written = std::fs::read(&path).unwrap();
     assert_eq!(&written[..2], &[0xFF, 0xFE]);
     let (decoded, had_errors) = encoding_rs::UTF_16LE.decode_without_bom_handling(&written[2..]);
@@ -217,7 +216,7 @@ async fn call_should_edit_gbk_file_with_explicit_encoding() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("edited"));
+    assert!(output.contains(&togi::t!("modify-replacements", count = 1)));
     let written = std::fs::read(&path).unwrap();
     let (decoded, _, had_errors) = encoding_rs::GBK.decode(&written);
     assert!(!had_errors);
@@ -236,7 +235,7 @@ async fn call_should_write_text_file_with_explicit_encoding() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("created"));
+    assert!(output.contains(&togi::t!("modify-action-created")));
     let written = std::fs::read(&path).unwrap();
     let (decoded, _, had_errors) = encoding_rs::GBK.decode(&written);
     assert!(!had_errors);
@@ -285,7 +284,7 @@ async fn call_should_not_write_when_text_create_is_dry_run() {
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("[dry run]"));
-    assert!(output.contains("would create"));
+    assert!(output.contains(&togi::t!("modify-action-create")));
     assert!(!path.exists());
 }
 
@@ -324,8 +323,8 @@ async fn call_should_create_binary_file_when_content_base64_is_provided() {
 
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("created"));
-    assert!(output.contains("(binary — no diff available)"));
+    assert!(output.contains(&togi::t!("modify-action-created")));
+    assert!(output.contains(&togi::t!("modify-binary-no-diff")));
     assert_eq!(std::fs::read(&path).unwrap(), data);
 }
 
@@ -378,7 +377,7 @@ async fn call_should_not_write_binary_file_when_dry_run() {
     let output = ctx.tool.call(args.to_string()).await.unwrap();
 
     assert!(output.contains("[dry run]"));
-    assert!(output.contains("would create"));
+    assert!(output.contains(&togi::t!("modify-action-create")));
     assert!(!path.exists());
 }
 
@@ -424,10 +423,14 @@ async fn call_should_skip_diff_when_overwriting_large_file() {
 
     let output = tool.call(args.to_string()).await.unwrap();
 
-    assert!(output.contains("overwrote"));
+    assert!(output.contains(&togi::t!("modify-action-overwrote")));
     assert!(
-        output.contains("diff skipped"),
+        output.contains("diff"),
         "large file overwrite should skip diff, got: {output}"
+    );
+    assert!(
+        !output.contains("@@"),
+        "large file overwrite should not produce a diff, got: {output}"
     );
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),

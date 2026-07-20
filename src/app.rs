@@ -1,9 +1,9 @@
 use crate::agent::DynamicAgent;
 use crate::cli::command::Args;
-use crate::shared::constants;
-use crate::shared::error::TogiError;
 use crate::pipeline::inject::{CWD_PARAM, Injection, inject};
 use crate::pipeline::paginate::paginate;
+use crate::shared::constants;
+use crate::shared::error::TogiError;
 use crate::store::{HistoryStore, MessageStore};
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
@@ -86,9 +86,10 @@ impl AppController {
         };
         let hist = self.history.read().await;
         if let Err(err) = store.save(session_id, &hist).await {
-            let _ = tx.send(OutputItem::Notice(
-                crate::t!("store-save-error", error = err.user_message()),
-            ));
+            let _ = tx.send(OutputItem::Notice(crate::t!(
+                "store-save-error",
+                error = err.user_message()
+            )));
         }
     }
 
@@ -245,14 +246,9 @@ fn build_agent(
 /// 初始化持久化存储并恢复上次会话的历史记录。
 ///
 /// 数据库不可用时静默降级为纯内存模式，不影响正常对话功能。
-async fn init_history() -> (
-    History,
-    Option<Arc<dyn MessageStore>>,
-    SessionId,
-) {
-    let session_id: SessionId = Arc::new(RwLock::new(Arc::from(
-        crate::store::default_session_id(),
-    )));
+async fn init_history() -> (History, Option<Arc<dyn MessageStore>>, SessionId) {
+    let session_id: SessionId =
+        Arc::new(RwLock::new(Arc::from(crate::store::default_session_id())));
     let Some(db_path) = crate::store::default_db_path() else {
         return (
             Arc::new(RwLock::new(Arc::from(Vec::new()))),
@@ -299,7 +295,7 @@ pub async fn run() -> crate::shared::error::Result<()> {
     preload_highlighting().await;
 
     let cwd = std::env::current_dir().map_err(|source| crate::shared::error::AppError::Io {
-        context: "get current working directory",
+        context: crate::t!("app-context-get-cwd"),
         source,
     })?;
     let (tools, registry) = build_tools(&cwd);

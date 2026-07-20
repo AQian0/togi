@@ -1,8 +1,8 @@
+use crate::shared::error::{ErrorKind, TogiError};
+use crate::shared::text_encoding::{TextEncodingError, encoding_from_label};
 use crate::shared::util::{
     FileTooLargeError, IoErrorClass, ToolPathError, classify_io_error, resolve_tool_path,
 };
-use crate::shared::error::{ErrorKind, TogiError};
-use crate::shared::text_encoding::{TextEncodingError, encoding_from_label};
 use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -10,7 +10,7 @@ use std::io::ErrorKind as IoErrorKind;
 use std::path::{Path, PathBuf};
 
 mod atomic;
-mod edit;
+pub mod edit;
 mod write;
 
 use edit::Replacement;
@@ -117,9 +117,17 @@ pub enum ModifyError {
     #[error("`{path}` is a directory, not a file. Provide a path that points to a file.")]
     NotAFile { path: String },
     #[error("{message}")]
-    OldTextNotFound { path: String, message: String },
+    OldTextNotFound {
+        path: String,
+        message: String,
+        suggestion: Option<edit::Suggestion>,
+    },
     #[error("{message}")]
-    OldTextNotUnique { path: String, message: String },
+    OldTextNotUnique {
+        path: String,
+        message: String,
+        lines: String,
+    },
     #[error(
         "two or more edits target overlapping text in `{path}`. Make each `old_text` cover a \
          distinct region."
@@ -142,12 +150,24 @@ impl edit::EditFailure for ModifyError {
         Self::EmptyOldText
     }
 
-    fn old_text_not_found(path: String, message: String) -> Self {
-        Self::OldTextNotFound { path, message }
+    fn old_text_not_found(
+        path: String,
+        message: String,
+        suggestion: Option<edit::Suggestion>,
+    ) -> Self {
+        Self::OldTextNotFound {
+            path,
+            message,
+            suggestion,
+        }
     }
 
-    fn old_text_not_unique(path: String, message: String) -> Self {
-        Self::OldTextNotUnique { path, message }
+    fn old_text_not_unique(path: String, message: String, lines: String) -> Self {
+        Self::OldTextNotUnique {
+            path,
+            message,
+            lines,
+        }
     }
 
     fn overlapping_edits(path: String) -> Self {
@@ -210,17 +230,39 @@ impl TogiError for ModifyError {
 
     fn user_message(&self) -> String {
         match self {
+            Self::EmptyPath => crate::t!("error-empty-path"),
+            Self::NoInstructions => crate::t!("error-no-instructions"),
+            Self::ConflictingInstructions => crate::t!("error-conflicting-instructions"),
+            Self::ConflictingBase64 => crate::t!("error-conflicting-base64"),
+            Self::InvalidBase64 { source } => {
+                crate::t!("error-invalid-base64", error = source.to_string())
+            }
+            Self::EmptyOldText => crate::t!("error-empty-old-text"),
+            Self::InvalidEncoding { enc } => {
+                crate::t!("error-invalid-text-encoding", enc = enc.clone())
+            }
+            Self::TextEncoding(err) => crate::shared::text_encoding::localized_error_message(err),
             Self::NotFound { path } => crate::t!("error-not-found", path = path.clone()),
             Self::NotAFile { path } => crate::t!("error-not-a-file", path = path.clone()),
             Self::PermissionDenied { path } => {
                 crate::t!("error-permission-denied", path = path.clone())
             }
             Self::NotUtf8 { path } => crate::t!("error-not-utf8", path = path.clone()),
-            Self::OldTextNotFound { path, .. } => {
-                crate::t!("error-old-text-not-found", path = path.clone())
+            Self::OldTextNotFound {
+                path, suggestion, ..
+            } => {
+                let base = crate::t!("error-old-text-not-found", path = path.clone());
+                match suggestion {
+                    Some(s) => format!("{base} {}", s.render_localized()),
+                    None => base,
+                }
             }
-            Self::OldTextNotUnique { path, .. } => {
-                crate::t!("error-old-text-not-unique", path = path.clone())
+            Self::OldTextNotUnique { path, lines, .. } => {
+                crate::t!(
+                    "error-old-text-not-unique",
+                    path = path.clone(),
+                    lines = lines.clone()
+                )
             }
             Self::OverlappingEdits { path } => {
                 crate::t!("error-overlapping-edits", path = path.clone())
@@ -364,11 +406,12 @@ impl Tool for Modify {
         let text_encoding = args
             .encoding
             .as_deref()
-            .map(encoding_from_label)
-            .transpose()
-            .map_err(|err| ModifyError::InvalidEncoding {
-                enc: err.to_string(),
-            })?;
+            .map(|label| {
+                encoding_from_label(label).map_err(|_| ModifyError::InvalidEncoding {
+                    enc: label.to_string(),
+                })
+            })
+            .transpose()?;
 
         if let Some(b64) = args.content_base64.as_deref() {
             let has_conflict = args.content.is_some()

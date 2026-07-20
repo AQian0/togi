@@ -8,7 +8,7 @@ use std::path::Path;
 pub(super) fn render(content: &str) -> String {
     let total = content.lines().count();
     if total == 0 {
-        return "(empty file)".to_string();
+        return crate::t!("read-empty-file");
     }
     let width = total.to_string().len();
     let mut out = String::with_capacity(content.len() + total * (width + 3));
@@ -50,21 +50,33 @@ pub(super) async fn read_streaming(
     let rendered = render(&content);
     let header = if offset_bytes > 0 {
         format!(
-            "`{display}` — {size} (reading from byte {offset})\n\n",
-            size = format_size(file_size),
-            offset = offset_bytes,
+            "{}\n\n",
+            crate::t!(
+                "read-header-offset",
+                display = display.to_string(),
+                size = format_size(file_size),
+                offset = offset_bytes
+            )
         )
     } else {
         format!(
-            "`{display}` — {size} (first {read_size})\n\n",
-            size = format_size(file_size),
-            read_size = format_size(limit_bytes.min(file_size)),
+            "{}\n\n",
+            crate::t!(
+                "read-header-first",
+                display = display.to_string(),
+                size = format_size(file_size),
+                read_size = format_size(limit_bytes.min(file_size))
+            )
         )
     };
 
     let unread_bytes = file_size.saturating_sub(offset_bytes);
     let notice = if was_truncated || offset_bytes.saturating_add(limit_bytes) < file_size {
-        truncation_notice(content.len() as u64, unread_bytes, "text")
+        truncation_notice(
+            content.len() as u64,
+            unread_bytes,
+            &crate::t!("common-unit-text"),
+        )
     } else {
         String::new()
     };
@@ -86,6 +98,6 @@ mod tests {
 
     #[test]
     fn render_reports_empty_file() {
-        assert_eq!(render(""), "(empty file)");
+        assert_eq!(render(""), crate::t!("read-empty-file"));
     }
 }

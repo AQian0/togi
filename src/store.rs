@@ -175,11 +175,9 @@ impl HistoryStore {
             .await
             .map_err(|source| StoreError::Query { source })?
         {
-            let json: String = row
-                .get(0)
-                .map_err(|source| StoreError::Query { source })?;
-            let msg: Message = serde_json::from_str(&json)
-                .map_err(|source| StoreError::Deserialize { source })?;
+            let json: String = row.get(0).map_err(|source| StoreError::Query { source })?;
+            let msg: Message =
+                serde_json::from_str(&json).map_err(|source| StoreError::Deserialize { source })?;
             messages.push(msg);
         }
         Ok(messages)
@@ -212,12 +210,9 @@ impl HistoryStore {
             &messages[existing..]
         } else {
             // 历史变短（当前不会发生），退化为全量替换。
-            tx.execute(
-                "DELETE FROM messages WHERE session_id = ?1",
-                [session_id],
-            )
-            .await
-            .map_err(|source| StoreError::Query { source })?;
+            tx.execute("DELETE FROM messages WHERE session_id = ?1", [session_id])
+                .await
+                .map_err(|source| StoreError::Query { source })?;
             messages
         };
         let mut stmt = tx
@@ -230,8 +225,8 @@ impl HistoryStore {
                 Message::Assistant { .. } => "assistant",
                 Message::System { .. } => "system",
             };
-            let json = serde_json::to_string(msg)
-                .map_err(|source| StoreError::Deserialize { source })?;
+            let json =
+                serde_json::to_string(msg).map_err(|source| StoreError::Deserialize { source })?;
             stmt.execute(turso::params_from_iter([
                 turso::Value::from(session_id),
                 turso::Value::from(role),
@@ -249,10 +244,7 @@ impl HistoryStore {
 
     async fn do_clear(&self, session_id: &str) -> Result<(), StoreError> {
         self.conn
-            .execute(
-                "DELETE FROM messages WHERE session_id = ?1",
-                [session_id],
-            )
+            .execute("DELETE FROM messages WHERE session_id = ?1", [session_id])
             .await
             .map_err(|source| StoreError::Query { source })?;
         Ok(())
@@ -272,9 +264,7 @@ impl HistoryStore {
             .await
             .map_err(|source| StoreError::Query { source })?
         {
-            let n: i64 = row
-                .get(0)
-                .map_err(|source| StoreError::Query { source })?;
+            let n: i64 = row.get(0).map_err(|source| StoreError::Query { source })?;
             Ok(n as usize)
         } else {
             Ok(0)
@@ -297,18 +287,10 @@ impl HistoryStore {
             .map_err(|source| StoreError::Query { source })?
         {
             sessions.push(SessionMeta {
-                id: row
-                    .get(0)
-                    .map_err(|source| StoreError::Query { source })?,
-                title: row
-                    .get(1)
-                    .map_err(|source| StoreError::Query { source })?,
-                created_at: row
-                    .get(2)
-                    .map_err(|source| StoreError::Query { source })?,
-                updated_at: row
-                    .get(3)
-                    .map_err(|source| StoreError::Query { source })?,
+                id: row.get(0).map_err(|source| StoreError::Query { source })?,
+                title: row.get(1).map_err(|source| StoreError::Query { source })?,
+                created_at: row.get(2).map_err(|source| StoreError::Query { source })?,
+                updated_at: row.get(3).map_err(|source| StoreError::Query { source })?,
             });
         }
         Ok(sessions)
@@ -331,10 +313,7 @@ impl HistoryStore {
 
     async fn do_delete_session(&self, session_id: &str) -> Result<(), StoreError> {
         self.conn
-            .execute(
-                "DELETE FROM messages WHERE session_id = ?1",
-                [session_id],
-            )
+            .execute("DELETE FROM messages WHERE session_id = ?1", [session_id])
             .await
             .map_err(|source| StoreError::Query { source })?;
         self.conn
@@ -394,7 +373,10 @@ pub fn default_db_path() -> Option<PathBuf> {
         return Some(PathBuf::from(path));
     }
     let base = dirs::data_dir()?;
-    Some(base.join(constants::APP_DIR_NAME).join(constants::DB_FILENAME))
+    Some(
+        base.join(constants::APP_DIR_NAME)
+            .join(constants::DB_FILENAME),
+    )
 }
 
 /// 生成默认会话 ID。当前实现为固定值，未来支持多会话时替换为
@@ -406,8 +388,8 @@ pub fn default_session_id() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rig::message::{Message, UserContent};
     use rig::OneOrMany;
+    use rig::message::{Message, UserContent};
 
     fn sample_user_message(text: &str) -> Message {
         Message::User {

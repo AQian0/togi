@@ -186,6 +186,7 @@ impl TogiError for ShellError {
 
     fn user_message(&self) -> String {
         match self {
+            Self::EmptyCommand => crate::t!("error-empty-command"),
             Self::BadWorkingDir { path } => {
                 crate::t!("error-bad-working-dir", path = path.clone())
             }
@@ -234,9 +235,7 @@ impl Tool for Shell {
             }
             ShellError::EmptyCommand
             | ShellError::MissingCwd
-            | ShellError::BadWorkingDir { .. } => {
-                ToolFailure::invalid_args(error.to_string())
-            }
+            | ShellError::BadWorkingDir { .. } => ToolFailure::invalid_args(error.to_string()),
             ShellError::Spawn { .. } | ShellError::Io { .. } => {
                 ToolFailure::other(error.to_string())
             }

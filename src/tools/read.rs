@@ -1,9 +1,9 @@
-use crate::shared::util::{
-    FileTooLargeError, IoErrorClass, ToolPathError, classify_io_error, is_binary, resolve_tool_path,
-};
 use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
 use crate::shared::text_encoding::{decode_text, encoding_from_label, is_binary_output_encoding};
+use crate::shared::util::{
+    FileTooLargeError, IoErrorClass, ToolPathError, classify_io_error, is_binary, resolve_tool_path,
+};
 use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -130,6 +130,10 @@ impl TogiError for ReadError {
 
     fn user_message(&self) -> String {
         match self {
+            Self::EmptyPath => crate::t!("error-empty-path"),
+            Self::InvalidEncoding { enc } => {
+                crate::t!("error-invalid-encoding", enc = enc.clone())
+            }
             Self::NotFound { path } => crate::t!("error-not-found", path = path.clone()),
             Self::NotAFile { path } => crate::t!("error-not-a-file", path = path.clone()),
             Self::PermissionDenied { path } => {
@@ -184,10 +188,8 @@ impl Tool for Read {
             ReadError::NotFound { .. } => {
                 ToolFailure::not_found(error.to_string()).with_code("read.not_found")
             }
-            ReadError::PermissionDenied { .. } => {
-                ToolFailure::permission_denied(error.to_string())
-                    .with_code("read.permission_denied")
-            }
+            ReadError::PermissionDenied { .. } => ToolFailure::permission_denied(error.to_string())
+                .with_code("read.permission_denied"),
             ReadError::EmptyPath
             | ReadError::MissingCwd
             | ReadError::FileTooLarge(_)
@@ -226,11 +228,12 @@ impl Tool for Read {
             .encoding
             .as_deref()
             .filter(|label| !is_binary_output_encoding(label))
-            .map(encoding_from_label)
-            .transpose()
-            .map_err(|err| ReadError::InvalidEncoding {
-                enc: err.to_string(),
-            })?;
+            .map(|label| {
+                encoding_from_label(label).map_err(|_| ReadError::InvalidEncoding {
+                    enc: label.to_string(),
+                })
+            })
+            .transpose()?;
 
         let head = io::read_head_from_file(&mut file, file_size)
             .await
@@ -258,7 +261,8 @@ impl Tool for Read {
                 .min(remaining_bytes);
             let streaming_encoding = requested_text_encoding.or_else(|| {
                 if offset_bytes == 0 {
-                    crate::shared::text_encoding::encoding_for_bom(&head).map(|(encoding, _)| encoding)
+                    crate::shared::text_encoding::encoding_for_bom(&head)
+                        .map(|(encoding, _)| encoding)
                 } else {
                     None
                 }

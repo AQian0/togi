@@ -51,7 +51,10 @@ impl TogiError for UiError {
 pub enum OutputItem {
     Section(SectionKind),
     Chunk(String),
-    ToolCall { name: String, summary: String },
+    ToolCall {
+        name: String,
+        summary: String,
+    },
     ToolResult(String),
     Notice(String),
     Error(ErrorInfo),

@@ -1,7 +1,7 @@
 use super::{Modify, ModifyError};
-use crate::shared::util::append_diff;
 use crate::shared::constants;
 use crate::shared::text_encoding::{decode_text, encode_text};
+use crate::shared::util::append_diff;
 use itertools::Itertools;
 use similar::{DiffOp, TextDiff};
 use std::path::Path;
@@ -11,9 +11,59 @@ const FUZZY_MAX_DISTANCE_RATIO: f64 = 0.5;
 
 pub(super) trait EditFailure: Sized {
     fn empty_old_text() -> Self;
-    fn old_text_not_found(path: String, message: String) -> Self;
-    fn old_text_not_unique(path: String, message: String) -> Self;
+    fn old_text_not_found(path: String, message: String, suggestion: Option<Suggestion>) -> Self;
+    fn old_text_not_unique(path: String, message: String, lines: String) -> Self;
     fn overlapping_edits(path: String) -> Self;
+}
+
+/// `old_text` 未命中时的相似行建议。
+///
+/// `render_en` 拼进 `Display`（面向模型的英文描述）；`render_localized`
+/// 拼进 `user_message`（面向用户的本地化消息）。
+#[derive(Debug, Clone)]
+pub enum Suggestion {
+    Line {
+        line: usize,
+        text: String,
+        dist: usize,
+    },
+    Lines {
+        start: usize,
+        end: usize,
+        dist: usize,
+    },
+}
+
+impl Suggestion {
+    pub(crate) fn render_en(&self) -> String {
+        match self {
+            Self::Line { line, text, dist } => format!(
+                "did you mean line {line}: `{text}` ({dist} char{})?",
+                if *dist == 1 { "" } else { "s" }
+            ),
+            Self::Lines { start, end, dist } => format!(
+                "did you mean lines {start}-{end} ({dist} char{})?",
+                if *dist == 1 { "" } else { "s" }
+            ),
+        }
+    }
+
+    pub(crate) fn render_localized(&self) -> String {
+        match self {
+            Self::Line { line, text, dist } => crate::t!(
+                "modify-suggestion-line",
+                line = *line,
+                text = text.clone(),
+                chars = *dist
+            ),
+            Self::Lines { start, end, dist } => crate::t!(
+                "modify-suggestion-lines",
+                start = *start,
+                end = *end,
+                chars = *dist
+            ),
+        }
+    }
 }
 
 pub(super) struct Replacement<'a> {
@@ -96,7 +146,7 @@ async fn apply_edits_blocking(
     .await
 }
 
-fn find_similar(content: &str, needle: &str) -> Option<String> {
+fn find_similar(content: &str, needle: &str) -> Option<Suggestion> {
     let needle = needle.trim();
     if needle.is_empty() {
         return None;
@@ -113,14 +163,10 @@ fn find_similar(content: &str, needle: &str) -> Option<String> {
             .map(|(i, line)| (i, strsim::levenshtein(needle, line)))
             .filter(|(_, d)| *d <= max_dist)
             .min_by_key(|(_, d)| *d);
-        return best.map(|(i, dist)| {
-            format!(
-                "did you mean line {}: `{}` ({} char{})?",
-                i + 1,
-                content_lines[i],
-                dist,
-                if dist == 1 { "" } else { "s" }
-            )
+        return best.map(|(i, dist)| Suggestion::Line {
+            line: i + 1,
+            text: content_lines[i].to_string(),
+            dist,
         });
     }
 
@@ -136,14 +182,10 @@ fn find_similar(content: &str, needle: &str) -> Option<String> {
         })
         .filter(|(_, d)| *d <= max_dist)
         .min_by_key(|(_, d)| *d);
-    best.map(|(start, dist)| {
-        format!(
-            "did you mean lines {}-{} ({} char{})?",
-            start + 1,
-            start + w,
-            dist,
-            if dist == 1 { "" } else { "s" }
-        )
+    best.map(|(start, dist)| Suggestion::Lines {
+        start: start + 1,
+        end: start + w,
+        dist,
     })
 }
 
@@ -173,15 +215,16 @@ where
             return Err(E::empty_old_text());
         }
         let start = content.find(edit.old).ok_or_else(|| {
+            let suggestion = find_similar(content, edit.old);
             let mut msg = format!(
                 "`old_text` was not found in `{display}`. Make sure it matches \
                  the file content exactly, including whitespace."
             );
-            if let Some(suggestion) = find_similar(content, edit.old) {
+            if let Some(s) = &suggestion {
                 msg.push(' ');
-                msg.push_str(&suggestion);
+                msg.push_str(&s.render_en());
             }
-            E::old_text_not_found(display.to_string(), msg)
+            E::old_text_not_found(display.to_string(), msg, suggestion)
         })?;
         if let Some(dup) = content[start + edit.old.len()..].find(edit.old) {
             let tail = &content[start + edit.old.len() + dup + edit.old.len()..];
@@ -200,6 +243,7 @@ where
                      [{pos_str}]; it must match exactly once. Add more surrounding \
                      context to make it unique."
                 ),
+                pos_str,
             ));
         }
         spans.push((start, start + edit.old.len(), edit.new));
@@ -254,9 +298,11 @@ pub(super) async fn edit_file(
     let (content, updated) = apply_edits_blocking(decoded.text, edits, display).await?;
 
     if dry_run {
-        let n = edits.len();
-        let noun = if n == 1 { "edit" } else { "edits" };
-        let summary = format!("[dry run] would apply {n} {noun} to `{display}`.");
+        let summary = crate::t!(
+            "modify-dry-run-edits",
+            count = edits.len(),
+            display = display.to_string()
+        );
         let diff = unified_diff_blocking(
             content,
             updated,
@@ -288,17 +334,23 @@ pub(super) async fn edit_file(
         edits.iter().partition(|edit| !edit.new.is_empty());
     let mut parts: Vec<String> = Vec::new();
     if !replacements.is_empty() {
-        let n = replacements.len();
-        parts.push(format!("{n} replacement{}", if n == 1 { "" } else { "s" }));
+        parts.push(crate::t!("modify-replacements", count = replacements.len()));
     }
     if !deletions.is_empty() {
-        let n = deletions.len();
-        parts.push(format!("{n} deletion{}", if n == 1 { "" } else { "s" }));
+        parts.push(crate::t!("modify-deletions", count = deletions.len()));
     }
     let summary = if parts.is_empty() {
-        format!("edited `{display}` (no changes).")
+        crate::t!(
+            "modify-edited-no-changes",
+            display = display.to_string(),
+            marker = crate::t!("common-no-changes")
+        )
     } else {
-        format!("edited `{display}` ({}).", parts.join(", "))
+        crate::t!(
+            "modify-edited",
+            display = display.to_string(),
+            details = parts.join(", ")
+        )
     };
 
     let diff = if mtime_stable {
@@ -342,11 +394,15 @@ mod tests {
             Self::EmptyOldText
         }
 
-        fn old_text_not_found(path: String, message: String) -> Self {
+        fn old_text_not_found(
+            path: String,
+            message: String,
+            _suggestion: Option<Suggestion>,
+        ) -> Self {
             Self::OldTextNotFound { path, message }
         }
 
-        fn old_text_not_unique(path: String, message: String) -> Self {
+        fn old_text_not_unique(path: String, message: String, _lines: String) -> Self {
             Self::OldTextNotUnique { path, message }
         }
 
@@ -460,5 +516,4 @@ mod tests {
             "expected line info in: {err}"
         );
     }
-
 }

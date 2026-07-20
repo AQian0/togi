@@ -1,16 +1,31 @@
 use super::edit::unified_diff_blocking;
 use super::{Modify, ModifyError};
-use crate::shared::util::{append_diff, format_size};
 use crate::shared::constants;
 use crate::shared::text_encoding::{decode_text, encode_text};
+use crate::shared::util::{append_diff, format_size};
 use std::path::Path;
 
 #[must_use]
-fn dry_run_output(action: &str, display: &str, diff: Option<String>) -> String {
+fn dry_run_output(action: String, display: &str, diff: Option<String>) -> String {
+    let head = crate::t!(
+        "modify-dry-run",
+        action = action,
+        display = display.to_string()
+    );
     match diff {
-        Some(diff) => format!("[dry run] would {action} `{display}`\n{diff}"),
-        None => format!("[dry run] would {action} `{display}` (no changes)"),
+        Some(diff) => format!("{head}\n{diff}"),
+        None => format!("{head} {}", crate::t!("common-no-changes")),
     }
+}
+
+fn action_word(existed: bool, past: bool) -> String {
+    let key = match (existed, past) {
+        (true, true) => "modify-action-overwrote",
+        (false, true) => "modify-action-created",
+        (true, false) => "modify-action-overwrite",
+        (false, false) => "modify-action-create",
+    };
+    crate::t!(key)
 }
 
 pub(super) async fn write_text_file(
@@ -41,9 +56,9 @@ pub(super) async fn write_text_file(
                 None,
                 mtime,
                 perms,
-                Some(format!(
-                    "diff skipped — existing file is too large ({})",
-                    format_size(metadata.len())
+                Some(crate::t!(
+                    "modify-diff-skipped-large",
+                    size = format_size(metadata.len())
                 )),
             )
         } else {
@@ -54,8 +69,9 @@ pub(super) async fn write_text_file(
                         None,
                         mtime,
                         perms,
-                        Some(format!(
-                            "diff skipped — could not decode existing file: {source}"
+                        Some(crate::t!(
+                            "modify-diff-skipped-decode",
+                            error = source.to_string()
                         )),
                     ),
                 },
@@ -63,8 +79,9 @@ pub(super) async fn write_text_file(
                     None,
                     mtime,
                     perms,
-                    Some(format!(
-                        "diff skipped — could not read existing file: {source}"
+                    Some(crate::t!(
+                        "modify-diff-skipped-read",
+                        error = source.to_string()
                     )),
                 ),
             }
@@ -74,11 +91,15 @@ pub(super) async fn write_text_file(
     };
 
     if dry_run {
-        let action = if existed { "overwrite" } else { "create" };
         if let Some(note) = diff_skip_note {
             return Ok(format!(
-                "[dry run] would {action} `{display}` ({}).\n({note})",
-                format_size(content.len() as u64),
+                "{}\n({note})",
+                crate::t!(
+                    "modify-dry-run-sized",
+                    action = action_word(existed, false),
+                    display = display.to_string(),
+                    size = format_size(content.len() as u64)
+                )
             ));
         }
         let diff = match old_text {
@@ -103,7 +124,7 @@ pub(super) async fn write_text_file(
                 .await?
             }
         };
-        return Ok(dry_run_output(action, display, diff));
+        return Ok(dry_run_output(action_word(existed, false), display, diff));
     }
 
     let mtime_ok = if let Some(expected) = mtime_before {
@@ -127,14 +148,19 @@ pub(super) async fn write_text_file(
     )
     .await?;
 
-    let action = if existed { "overwrote" } else { "created" };
     let bytes = content.len();
     let lines = if content.is_empty() {
         0
     } else {
         content.lines().count()
     };
-    let summary = format!("{action} `{display}` ({bytes} bytes, {lines} lines).");
+    let summary = crate::t!(
+        "modify-summary",
+        action = action_word(existed, true),
+        display = display.to_string(),
+        bytes = bytes,
+        lines = lines
+    );
 
     let diff = if mtime_ok {
         match old_text {
@@ -173,9 +199,7 @@ pub(super) async fn write_text_file(
     };
 
     if let Some(note) = diff_skip_note {
-        out.push_str(&format!(
-            "\n(warning: {note}; use `shell` with `diff` to compare)"
-        ));
+        out.push_str(&crate::t!("modify-diff-skipped-warning", note = note));
     }
     if let Some(w) = warning {
         out.push('\n');
@@ -209,10 +233,11 @@ pub(super) async fn write_binary_file(
     };
 
     if dry_run {
-        let action = if existed { "overwrite" } else { "create" };
-        return Ok(format!(
-            "[dry run] would {action} `{display}` ({}).",
-            format_size(data.len() as u64)
+        return Ok(crate::t!(
+            "modify-dry-run-sized",
+            action = action_word(existed, false),
+            display = display.to_string(),
+            size = format_size(data.len() as u64)
         ));
     }
 
@@ -225,10 +250,14 @@ pub(super) async fn write_binary_file(
     )
     .await?;
 
-    let action = if existed { "overwrote" } else { "created" };
-    let summary = format!("{action} `{display}` ({}).", format_size(data.len() as u64));
+    let summary = crate::t!(
+        "modify-summary-sized",
+        action = action_word(existed, true),
+        display = display.to_string(),
+        size = format_size(data.len() as u64)
+    );
 
-    let mut out = format!("{summary}\n(binary — no diff available)");
+    let mut out = format!("{summary}\n{}", crate::t!("modify-binary-no-diff"));
     if let Some(w) = warning {
         out.push('\n');
         out.push_str(&w);

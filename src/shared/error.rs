@@ -84,7 +84,7 @@ pub enum AppError {
 
     #[error("{context}: {source}")]
     Io {
-        context: &'static str,
+        context: String,
         #[source]
         source: std::io::Error,
     },
@@ -138,7 +138,7 @@ impl TogiError for AppError {
             Self::Io { context, source } => {
                 crate::t!(
                     "app-io-error",
-                    context = (*context).to_string(),
+                    context = context.clone(),
                     error = source.to_string()
                 )
             }
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn io_error_carries_context() {
         let err = AppError::Io {
-            context: "get current working directory",
+            context: "get current working directory".to_string(),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "no such directory"),
         };
         assert_eq!(err.code(), "app.io");

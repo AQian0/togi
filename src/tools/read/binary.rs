@@ -1,6 +1,6 @@
 use super::{Read, ReadError, io};
-use crate::shared::util::format_size;
 use crate::shared::constants;
+use crate::shared::util::format_size;
 use std::fmt::Write;
 use std::path::Path;
 
@@ -44,8 +44,8 @@ pub(super) fn render_hexdump(data: &[u8], max_bytes: usize, base_offset: u64) ->
     if truncated {
         write!(
             out,
-            "\n(showing {len} of {} bytes; use `shell` with `xxd`, `file`, or `hexdump` for full content)",
-            data.len()
+            "\n{}",
+            crate::t!("read-binary-hex-truncated", shown = len, total = data.len())
         )
         .unwrap();
     }
@@ -96,14 +96,20 @@ pub(super) async fn read_binary(request: BinaryReadRequest<'_>) -> Result<String
             };
             let hex = render_hexdump(&preview, constants::HEXDUMP_MAX_BYTES, offset_bytes);
             let range = if offset_bytes > 0 {
-                format!(" (from byte {offset_bytes})")
+                format!(
+                    " {}",
+                    crate::t!("read-binary-from-byte", offset = offset_bytes)
+                )
             } else {
                 String::new()
             };
-            Ok(format!(
-                "(binary) `{display}` — {size}{range}\n\n{hex}",
+            Ok(crate::t!(
+                "read-binary-header-hex",
+                display = display.to_string(),
                 size = format_size(file_size),
-            ))
+                range = range
+            ) + "\n\n"
+                + &hex)
         }
         "base64" => {
             let default_limit = if is_large {
@@ -122,22 +128,32 @@ pub(super) async fn read_binary(request: BinaryReadRequest<'_>) -> Result<String
             let b64 = render_base64(&data);
             let warning = if limit < remaining_bytes {
                 format!(
-                    "\n(warning: only {} of the remaining {} were base64-encoded; \
-                     pass `offset_bytes`/`limit_bytes` or use `shell` with `base64` for more)",
-                    format_size(limit),
-                    format_size(remaining_bytes),
+                    "\n{}",
+                    crate::t!(
+                        "read-binary-base64-truncated",
+                        shown = format_size(limit),
+                        total = format_size(remaining_bytes)
+                    )
                 )
             } else {
                 String::new()
             };
             let range = if offset_bytes > 0 {
-                format!(" from byte {offset_bytes}")
+                format!(
+                    " {}",
+                    crate::t!("read-binary-from-byte", offset = offset_bytes)
+                )
             } else {
                 String::new()
             };
             Ok(format!(
-                "(binary) `{display}` — {size}, base64{range}:\n\n{b64}{warning}",
-                size = format_size(file_size),
+                "{}\n\n{b64}{warning}",
+                crate::t!(
+                    "read-binary-header-base64",
+                    display = display.to_string(),
+                    size = format_size(file_size),
+                    range = range
+                )
             ))
         }
         enc => Err(ReadError::InvalidEncoding {
@@ -162,7 +178,11 @@ mod tests {
     fn hexdump_truncates() {
         let data = vec![0u8; 1024];
         let out = render_hexdump(&data, 16, 0);
-        assert!(out.contains("showing 16 of 1024 bytes"));
+        assert!(out.contains(&crate::t!(
+            "read-binary-hex-truncated",
+            shown = 16,
+            total = 1024
+        )));
     }
 
     #[test]

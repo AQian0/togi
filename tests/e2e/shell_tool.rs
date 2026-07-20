@@ -10,9 +10,15 @@ async fn shell_runs_command_and_captures_stdout() {
         .call(r#"{"command":"echo hello"}"#.to_string())
         .await
         .unwrap();
-    assert!(output.contains("exit code: 0"));
+    assert!(output.contains(&togi::t!("shell-exit-code-line", code = 0)));
     assert!(output.contains("hello"));
-    assert!(output.contains("cwd:"), "should display cwd");
+    assert!(
+        output.contains(&togi::t!(
+            "shell-cwd-line",
+            cwd = std::env::temp_dir().display().to_string()
+        )),
+        "should display cwd"
+    );
 }
 
 #[tokio::test]
@@ -42,7 +48,7 @@ mod unix {
             .call(r#"{"command":"exit 3"}"#.to_string())
             .await
             .unwrap();
-        assert!(output.contains("exit code: 3"));
+        assert!(output.contains(&togi::t!("shell-exit-code-line", code = 3)));
     }
 
     #[tokio::test]
@@ -100,7 +106,7 @@ mod unix {
             .call(r#"{"command":"true","interleave":true}"#.to_string())
             .await
             .unwrap();
-        assert!(output.contains("(no output)"));
+        assert!(output.contains(&togi::t!("conv-empty-output")));
     }
 
     #[tokio::test]
@@ -125,7 +131,7 @@ mod unix {
             .await
             .unwrap();
         assert!(
-            output.contains("truncated"),
+            output.contains("`head`/`tail`"),
             "large interleaved output should be truncated, got: {output}"
         );
     }
@@ -134,13 +140,11 @@ mod unix {
     #[ignore = "slow: processes 300KB output"]
     async fn shell_truncates_large_separated_output() {
         let output = tool()
-            .call(
-                r#"{"command":"yes 'test line' | head -c 300000","timeout_secs":10}"#.to_string(),
-            )
+            .call(r#"{"command":"yes 'test line' | head -c 300000","timeout_secs":10}"#.to_string())
             .await
             .unwrap();
         assert!(
-            output.contains("truncated"),
+            output.contains("`head`/`tail`"),
             "large separated output should be truncated, got: {output}"
         );
         assert!(output.len() < 270_000, "output was not bounded");

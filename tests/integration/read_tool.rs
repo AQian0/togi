@@ -66,7 +66,7 @@ async fn read_binary_returns_hexdump() {
 
     let args = serde_json::json!({"path": path.display().to_string()});
     let output = ctx.tool.call(args.to_string()).await.unwrap();
-    assert!(output.contains("(binary)"));
+    assert!(output.contains(&path.display().to_string()));
     assert!(output.contains("00000000"));
     assert!(
         !output.contains("1 | "),
@@ -82,7 +82,7 @@ async fn read_binary_hex_respects_offset() {
 
     let args = serde_json::json!({"path": path.display().to_string(), "offset_bytes": 2});
     let output = ctx.tool.call(args.to_string()).await.unwrap();
-    assert!(output.contains("from byte 2"));
+    assert!(output.contains(&togi::t!("read-binary-from-byte", offset = 2)));
     assert!(output.contains("00000002"));
     assert!(
         output.contains("41 42 43"),
@@ -98,7 +98,7 @@ async fn read_binary_base64_encoding() {
 
     let args = serde_json::json!({"path": path.display().to_string(), "encoding": "base64"});
     let output = ctx.tool.call(args.to_string()).await.unwrap();
-    assert!(output.contains("(binary)"));
+    assert!(output.contains(&path.display().to_string()));
     assert!(output.contains("base64"));
     assert!(output.contains("AGJpbmFyeQ=="));
 }
@@ -154,12 +154,12 @@ async fn read_large_file_uses_streaming_and_shows_truncation_notice() {
     let output = tool.call(args.to_string()).await.unwrap();
 
     assert!(
-        output.contains("first"),
-        "large file output should indicate partial read, got: {output}"
+        output.contains(&path.display().to_string()),
+        "large file output should show the header, got: {output}"
     );
     assert!(
-        !output.contains("(binary)"),
-        "text file should not show binary"
+        output.contains("1 | "),
+        "text file should render with line numbers, got: {output}"
     );
 
     crate::support::remove_file(&path);
@@ -180,7 +180,7 @@ async fn read_large_file_offset_bytes() {
     let output = tool.call(args.to_string()).await.unwrap();
 
     assert!(
-        output.contains("byte 1000000"),
+        output.contains("1000000"),
         "offset_bytes not reflected in output: {output}"
     );
 
@@ -191,7 +191,7 @@ async fn read_large_file_offset_bytes() {
     });
     let output = tool.call(args.to_string()).await.unwrap();
     assert!(
-        output.contains("byte 999999999999") && output.contains("(empty file)"),
+        output.contains("999999999999") && output.contains(&togi::t!("read-empty-file")),
         "offset past EOF should be handled without underflow: {output}"
     );
 

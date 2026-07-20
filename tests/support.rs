@@ -58,10 +58,7 @@ impl TestDir {
 
     pub fn join(&self, relative: impl AsRef<Path>) -> PathBuf {
         let rel = relative.as_ref();
-        assert!(
-            !rel.is_absolute(),
-            "TestDir::join requires a relative path"
-        );
+        assert!(!rel.is_absolute(), "TestDir::join requires a relative path");
         let full = self.path.join(rel);
         if let Some(parent) = full.parent() {
             let _ = std::fs::create_dir_all(parent);

@@ -1,6 +1,7 @@
 use crate::shared::error::{ErrorKind, TogiError};
 use futures::StreamExt;
 use itertools::Itertools;
+use rig::OneOrMany;
 use rig::agent::MultiTurnStreamItem;
 use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::CompletionModel;
@@ -8,7 +9,6 @@ use rig::completion::message::ToolResultContent;
 use rig::message::{AssistantContent, Message, Reasoning, Text, ToolCall, ToolResult, UserContent};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use rig::tool::ToolDyn;
-use rig::OneOrMany;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -205,9 +205,10 @@ impl PartialTurn {
         if self.assistant.is_empty() {
             return;
         }
-        let content =
-            OneOrMany::many(std::mem::take(&mut self.assistant)).expect("assistant content non-empty");
-        self.committed.push(Message::Assistant { id: None, content });
+        let content = OneOrMany::many(std::mem::take(&mut self.assistant))
+            .expect("assistant content non-empty");
+        self.committed
+            .push(Message::Assistant { id: None, content });
     }
 
     /// 收尾为完整历史：原历史 + 用户输入 + 本轮新消息；零进展时原样返回。
@@ -380,8 +381,9 @@ async fn stream_once<M: CompletionModel + 'static>(
                     });
                 }
                 StreamedAssistantContent::Unknown(value) => {
-                    let _ = tx.send(AgentEvent::Notice(format!(
-                        "received unhandled provider output: {value}"
+                    let _ = tx.send(AgentEvent::Notice(crate::t!(
+                        "agent-unhandled-output",
+                        value = value.to_string()
                     )));
                 }
                 _ => {}
@@ -778,7 +780,9 @@ mod tests {
 
     #[test]
     fn transient_statuses_are_retryable() {
-        assert!(is_transient(&stream_err(http::StatusCode::TOO_MANY_REQUESTS)));
+        assert!(is_transient(&stream_err(
+            http::StatusCode::TOO_MANY_REQUESTS
+        )));
         assert!(is_transient(&stream_err(
             http::StatusCode::SERVICE_UNAVAILABLE
         )));

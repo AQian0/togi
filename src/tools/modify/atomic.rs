@@ -74,7 +74,7 @@ where
     let mtime_warning = if let Some(expected) = expected_mtime {
         match tokio::fs::metadata(path).await {
             Ok(ref meta) if meta.modified().ok() == Some(expected) => None,
-            Ok(_) => Some("warning: file was modified externally before write".to_string()),
+            Ok(_) => Some(crate::t!("modify-mtime-warning")),
             Err(_) => None,
         }
     } else {

@@ -1,7 +1,7 @@
 use super::capture::{StreamCapture, StreamChunk};
 use super::process;
-use crate::shared::util::format_size;
 use crate::shared::constants;
+use crate::shared::util::format_size;
 use std::fmt::Write;
 use std::path::Path;
 use std::process::ExitStatus;
@@ -24,10 +24,16 @@ pub(super) fn render_separated(
     let estimated = stdout_display.len() + stderr_display.len() + code.len() + 256;
     let mut out = String::with_capacity(estimated);
 
-    write!(out, "cwd: {}\nexit code: {}\n", cwd.display(), code).unwrap();
+    write!(
+        out,
+        "{}\n{}\n",
+        crate::t!("shell-cwd-line", cwd = cwd.display().to_string()),
+        crate::t!("shell-exit-code-line", code = code)
+    )
+    .unwrap();
 
     if stdout_display.is_empty() && stderr_display.is_empty() {
-        out.push_str("(no output)");
+        out.push_str(&crate::t!("conv-empty-output"));
         return out;
     }
     if !stdout_display.is_empty() {
@@ -44,10 +50,12 @@ pub(super) fn render_separated(
     if truncated {
         let _ = write!(
             out,
-            "(output truncated at {} of {}; use shell redirects or `head`/`tail` to \
-             inspect full output)",
-            format_size(stored_output_len as u64),
-            format_size(total_output_len as u64),
+            "{}",
+            crate::t!(
+                "shell-output-truncated",
+                shown = format_size(stored_output_len as u64),
+                total = format_size(total_output_len as u64)
+            ),
         );
     }
 
@@ -67,10 +75,16 @@ pub(super) fn render_interleaved(
         (stored_bytes.min(constants::SHELL_MAX_OUTPUT_BYTES + 512)) + (chunks.len() * 8) + 256,
     );
 
-    write!(out, "cwd: {}\nexit code: {}\n", cwd.display(), code).unwrap();
+    write!(
+        out,
+        "{}\n{}\n",
+        crate::t!("shell-cwd-line", cwd = cwd.display().to_string()),
+        crate::t!("shell-exit-code-line", code = code)
+    )
+    .unwrap();
 
     if chunks.is_empty() {
-        out.push_str("(no output)");
+        out.push_str(&crate::t!("conv-empty-output"));
         return out;
     }
 
@@ -103,10 +117,12 @@ pub(super) fn render_interleaved(
     if truncated {
         let _ = write!(
             out,
-            "\n(output truncated at {} of {}; use shell redirects or `head`/`tail` to \
-             inspect full output)",
-            format_size(stored_bytes as u64),
-            format_size(total_bytes as u64),
+            "\n{}",
+            crate::t!(
+                "shell-output-truncated",
+                shown = format_size(stored_bytes as u64),
+                total = format_size(total_bytes as u64)
+            ),
         );
     }
 

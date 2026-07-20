@@ -12,6 +12,21 @@ pub enum TextEncodingError {
     Encode { encoding: &'static str },
 }
 
+/// `TextEncodingError` 的本地化用户消息（供 `user_message` 使用）。
+pub(crate) fn localized_error_message(err: &TextEncodingError) -> String {
+    match err {
+        TextEncodingError::UnsupportedLabel { label } => {
+            crate::t!("error-invalid-text-encoding", enc = label.clone())
+        }
+        TextEncodingError::Decode { encoding } => {
+            crate::t!("error-encoding-decode", encoding = *encoding)
+        }
+        TextEncodingError::Encode { encoding } => {
+            crate::t!("error-encoding-encode", encoding = *encoding)
+        }
+    }
+}
+
 pub(crate) struct DecodedText {
     pub(crate) text: String,
     pub(crate) encoding: &'static Encoding,
