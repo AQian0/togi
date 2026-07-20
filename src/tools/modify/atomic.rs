@@ -1,28 +1,9 @@
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
 
 pub(super) trait AtomicWriteFailure: Sized {
     fn from_atomic_io(source: std::io::Error, display: &str) -> Self;
-}
-
-fn random_u64() -> u64 {
-    RandomState::new().build_hasher().finish()
-}
-
-fn unique_suffix() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let pid = std::process::id();
-    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let rand = random_u64();
-    format!("{pid}-{seq}-{nanos:x}-{rand:x}")
 }
 
 async fn atomic_write_bytes_inner<E>(
@@ -51,7 +32,7 @@ where
     let tmp = dir.join(format!(
         ".{file_name}.{}-{}.tmp",
         crate::shared::constants::TEMP_FILE_SUFFIX,
-        unique_suffix()
+        uuid::Uuid::new_v4().simple()
     ));
 
     let write_result = async {

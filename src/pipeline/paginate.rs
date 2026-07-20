@@ -1,24 +1,28 @@
-use crate::pipeline::tool_pipeline::ApplyLayer;
 use crate::shared::util::parse_args_object;
 use itertools::Itertools;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
-use schemars::JsonSchema;
 use serde_json::{Map, Value};
 use std::fmt::Write;
+
 pub const OFFSET_PARAM: &str = "offset";
 pub const LIMIT_PARAM: &str = "limit";
 
-pub fn paginate<T, Shape>(default_limit: usize, tools: T) -> T::Output
-where
-    T: ApplyLayer<Shape>,
-{
-    tools.apply(move |tool| wrap(tool, default_limit))
+pub fn paginate(
+    default_limit: usize,
+    tools: Vec<Box<dyn ToolDyn>>,
+) -> Vec<Box<dyn ToolDyn>> {
+    tools
+        .into_iter()
+        .map(|tool| wrap(tool, default_limit))
+        .collect()
 }
+
 struct PaginatedTool {
     inner: Box<dyn ToolDyn>,
     default_limit: usize,
 }
+
 impl ToolDyn for PaginatedTool {
     fn name(&self) -> String {
         self.inner.name()
@@ -48,25 +52,24 @@ impl ToolDyn for PaginatedTool {
         })
     }
 }
+
 fn wrap(inner: Box<dyn ToolDyn>, default_limit: usize) -> Box<dyn ToolDyn> {
     Box::new(PaginatedTool {
         inner,
         default_limit,
     })
 }
+
 fn paginate_text(
     text: &str,
     offset: Option<usize>,
     limit: Option<usize>,
     default_limit: usize,
 ) -> String {
-    // 先计数总行数（惰性迭代，不分配），再按需提取分页区间。
     let total = text.lines().count();
     if total == 0 {
         return text.to_string();
     }
-    // offset is validated as >=1 at the tool-call boundary; keep max(1) as
-    // defense-in-depth in case this helper is ever called from another path.
     let start = offset.unwrap_or(1).max(1);
     if start > total {
         return crate::t!("paginate-past-end", offset = start, total = total);
@@ -114,26 +117,12 @@ fn paginate_text(
                 "paginate-more-lines",
                 count = total - end_idx,
                 offset = end_idx + 1
-            )
+            ),
         );
     }
     out
 }
-/// Typed source of the injected pagination parameters. Deriving the schema with
-/// schemars keeps the `offset`/`limit` definitions in one typed place instead of
-/// hand-written JSON, mirroring how the concrete tools declare their arguments.
-#[derive(JsonSchema)]
-#[expect(dead_code)]
-struct PaginationParams {
-    /// 1-based line number of this tool's output to start from. Defaults to 1.
-    /// Use together with `limit` to page through large output.
-    #[schemars(range(min = 1))]
-    offset: u64,
-    /// Maximum number of output lines to return. Omit for the default page
-    /// size, or pass 0 for no limit. When more lines remain, the result ends
-    /// with the `offset` to use for the next page.
-    limit: u64,
-}
+
 fn add_pagination_params(parameters: &mut Value) {
     let Some(schema) = parameters.as_object_mut() else {
         return;
@@ -144,17 +133,24 @@ fn add_pagination_params(parameters: &mut Value) {
     let Some(properties) = properties.as_object_mut() else {
         return;
     };
-    let generated = serde_json::to_value(schemars::schema_for!(PaginationParams))
-        .expect("pagination params schema serializes");
-    let Some(generated) = generated.get("properties").and_then(Value::as_object) else {
-        return;
-    };
-    for param in [OFFSET_PARAM, LIMIT_PARAM] {
-        if let Some(schema) = generated.get(param) {
-            properties.insert(param.to_string(), schema.clone());
-        }
-    }
+    // ponytail: inline the two simple params instead of schemars derive round-trip
+    properties.insert(
+        OFFSET_PARAM.to_string(),
+        serde_json::json!({
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based line number to start from. Use with `limit` to page through large output."
+        }),
+    );
+    properties.insert(
+        LIMIT_PARAM.to_string(),
+        serde_json::json!({
+            "type": "integer",
+            "description": "Max lines to return. Omit for default, 0 for no limit."
+        }),
+    );
 }
+
 fn take_usize(args: &mut Map<String, Value>, key: &str) -> Result<Option<usize>, ToolError> {
     match args.remove(key) {
         None | Some(Value::Null) => Ok(None),
@@ -169,17 +165,21 @@ fn take_usize(args: &mut Map<String, Value>, key: &str) -> Result<Option<usize>,
         Some(_) => Err(bad_integer(key)),
     }
 }
+
 fn bad_integer(key: &str) -> ToolError {
     ToolError::ToolCallError(crate::t!("paginate-bad-integer", key = key.to_string()).into())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn full_output_is_returned_unchanged() {
         let out = paginate_text("a\nb\nc\n", None, None, 0);
         assert_eq!(out, "a\nb\nc\n");
     }
+
     #[test]
     fn empty_output_is_passed_through() {
         assert_eq!(paginate_text("", None, None, 10), "");
@@ -188,6 +188,7 @@ mod tests {
             "(empty file)"
         );
     }
+
     #[test]
     fn offset_starts_at_requested_line() {
         let out = paginate_text("a\nb\nc\nd\n", Some(2), None, 0);
@@ -197,6 +198,7 @@ mod tests {
         assert!(out.contains("b\n"));
         assert!(out.contains("d\n"));
     }
+
     #[test]
     fn limit_caps_lines_and_hints_next_offset() {
         let out = paginate_text("a\nb\nc\nd\ne\n", Some(1), Some(2), 0);
@@ -204,39 +206,44 @@ mod tests {
         assert!(out.starts_with(&format!("{head}\n")));
         assert!(out.contains("a\nb\n"));
         assert!(!out.contains("\nc\n"));
-        assert!(out.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
+        assert!(out.contains(&crate::t!(
+            "paginate-more-lines",
+            count = 3,
+            offset = 3
+        )));
     }
+
     #[test]
     fn default_limit_applies_when_limit_omitted() {
         let out = paginate_text("a\nb\nc\nd\ne\n", None, None, 2);
         let head = crate::t!("paginate-showing", start = 1, end = 2, total = 5);
         assert!(out.starts_with(&format!("{head}\n")));
-        assert!(out.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
+        assert!(out.contains(&crate::t!(
+            "paginate-more-lines",
+            count = 3,
+            offset = 3
+        )));
     }
+
     #[test]
     fn explicit_zero_limit_overrides_default_and_returns_all() {
         let out = paginate_text("a\nb\nc\nd\ne\n", None, Some(0), 2);
         assert_eq!(out, "a\nb\nc\nd\ne\n");
     }
+
     #[test]
     fn offset_of_zero_is_clamped_to_one_at_helper_level() {
-        // paginate_text still clamps offset 0 → 1 as defense-in-depth.
-        // The tool-call boundary rejects offset=0 before reaching here
-        // (see offset_zero_rejected_at_tool_level below).
         let out = paginate_text("a\nb\n", Some(0), Some(1), 0);
         assert!(out.contains("a\n"));
         assert!(!out.contains("\nb\n"));
     }
+
     #[test]
     fn offset_past_end_reports_total() {
         let out = paginate_text("a\nb\n", Some(9), None, 0);
         assert_eq!(out, crate::t!("paginate-past-end", offset = 9, total = 2));
     }
-    #[derive(JsonSchema)]
-    struct RawEchoArgs {
-        #[expect(dead_code)]
-        text: String,
-    }
+
     struct RawEcho;
     impl ToolDyn for RawEcho {
         fn name(&self) -> String {
@@ -247,14 +254,16 @@ mod tests {
         }
 
         fn parameters(&self) -> serde_json::Value {
-            serde_json::to_value(schemars::schema_for!(RawEchoArgs)).unwrap()
+            serde_json::json!({
+                "type": "object",
+                "properties": { "text": { "type": "string" } }
+            })
         }
         fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
             Box::pin(async move { Ok(args) })
         }
     }
-    #[derive(JsonSchema)]
-    struct FixedLinesArgs {}
+
     struct FixedLines;
     impl ToolDyn for FixedLines {
         fn name(&self) -> String {
@@ -265,24 +274,30 @@ mod tests {
         }
 
         fn parameters(&self) -> serde_json::Value {
-            serde_json::to_value(schemars::schema_for!(FixedLinesArgs)).unwrap()
+            serde_json::json!({ "type": "object", "properties": {} })
         }
         fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
             Box::pin(async { Ok("l1\nl2\nl3\nl4\nl5\n".to_string()) })
         }
     }
+
     #[tokio::test]
     async fn definition_adds_offset_and_limit_params() {
-        let tool = paginate(0, RawEcho);
+        let tool = paginate(0, vec![Box::new(RawEcho) as Box<dyn ToolDyn>])
+            .pop()
+            .unwrap();
         let definition = rig::tool::tool_definition(&*tool);
         let properties = definition.parameters["properties"].as_object().unwrap();
         assert!(properties.contains_key("text"));
         assert!(properties.contains_key("offset"));
         assert!(properties.contains_key("limit"));
     }
+
     #[tokio::test]
     async fn pagination_params_are_stripped_before_reaching_inner_tool() {
-        let tool = paginate(0, RawEcho);
+        let tool = paginate(0, vec![Box::new(RawEcho) as Box<dyn ToolDyn>])
+            .pop()
+            .unwrap();
         let output = tool
             .call(r#"{"text":"hi","offset":1,"limit":5}"#.to_string())
             .await
@@ -292,9 +307,12 @@ mod tests {
         assert!(!echoed.contains_key("offset"));
         assert!(!echoed.contains_key("limit"));
     }
+
     #[tokio::test]
     async fn call_paginates_inner_output() {
-        let tool = paginate(0, FixedLines);
+        let tool = paginate(0, vec![Box::new(FixedLines) as Box<dyn ToolDyn>])
+            .pop()
+            .unwrap();
         let output = tool
             .call(r#"{"offset":2,"limit":2}"#.to_string())
             .await
@@ -307,38 +325,58 @@ mod tests {
         assert!(output.contains("l3\n"));
         assert!(!output.contains("l1"));
         assert!(!output.contains("l4"));
-        assert!(output.contains(&crate::t!("paginate-more-lines", count = 2, offset = 4)));
+        assert!(output.contains(&crate::t!(
+            "paginate-more-lines",
+            count = 2,
+            offset = 4
+        )));
     }
+
     #[tokio::test]
     async fn default_limit_paginates_without_explicit_args() {
-        let tool = paginate(2, FixedLines);
+        let tool = paginate(2, vec![Box::new(FixedLines) as Box<dyn ToolDyn>])
+            .pop()
+            .unwrap();
         let output = tool.call("{}".to_string()).await.unwrap();
         assert!(output.starts_with(&format!(
             "{}\n",
             crate::t!("paginate-showing", start = 1, end = 2, total = 5)
         )));
-        assert!(output.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
+        assert!(output.contains(&crate::t!(
+            "paginate-more-lines",
+            count = 3,
+            offset = 3
+        )));
     }
+
     #[tokio::test]
     async fn rejects_non_integer_offset() {
-        let tool = paginate(0, RawEcho);
+        let tool = paginate(0, vec![Box::new(RawEcho) as Box<dyn ToolDyn>])
+            .pop()
+            .unwrap();
         let result = tool
             .call(r#"{"text":"hi","offset":"abc"}"#.to_string())
             .await;
         assert!(result.is_err());
     }
+
     #[tokio::test]
     async fn paginate_returns_tool_vec_for_vec_input() {
         let tools: Vec<Box<dyn ToolDyn>> = paginate(
             0,
-            vec![Box::new(RawEcho) as Box<dyn ToolDyn>, Box::new(FixedLines)],
+            vec![
+                Box::new(RawEcho) as Box<dyn ToolDyn>,
+                Box::new(FixedLines),
+            ],
         );
         assert_eq!(tools.len(), 2);
     }
 
     #[tokio::test]
     async fn offset_zero_rejected_at_tool_level() {
-        let tool = paginate(0, RawEcho);
+        let tool = paginate(0, vec![Box::new(RawEcho) as Box<dyn ToolDyn>])
+            .pop()
+            .unwrap();
         let result = tool.call(r#"{"text":"hi","offset":0}"#.to_string()).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();

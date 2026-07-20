@@ -1,37 +1,23 @@
-use crate::pipeline::tool_pipeline::ApplyLayer;
 use crate::shared::util::parse_args_object;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::{Map, Value};
+
 pub const CWD_PARAM: &str = "cwd";
 
-#[derive(Clone, Debug, Default)]
-pub struct Injection {
-    params: Map<String, Value>,
+/// Inject hidden runtime parameters (e.g. `cwd`) into every tool call.
+pub fn inject(params: Map<String, Value>, tools: Vec<Box<dyn ToolDyn>>) -> Vec<Box<dyn ToolDyn>> {
+    tools
+        .into_iter()
+        .map(|tool| wrap(tool, params.clone()))
+        .collect()
 }
-impl Injection {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    pub fn value(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.params.insert(key.into(), value.into());
-        self
-    }
-    fn into_params(self) -> Map<String, Value> {
-        self.params
-    }
-}
-pub fn inject<T, Shape>(injection: impl Into<Injection>, tools: T) -> T::Output
-where
-    T: ApplyLayer<Shape>,
-{
-    let params = injection.into().into_params();
-    tools.apply(move |tool| wrap(tool, params.clone()))
-}
+
 struct InjectedTool {
     inner: Box<dyn ToolDyn>,
     params: Map<String, Value>,
 }
+
 impl ToolDyn for InjectedTool {
     fn name(&self) -> String {
         self.inner.name()
@@ -56,9 +42,11 @@ impl ToolDyn for InjectedTool {
         })
     }
 }
+
 fn wrap(inner: Box<dyn ToolDyn>, params: Map<String, Value>) -> Box<dyn ToolDyn> {
     Box::new(InjectedTool { inner, params })
 }
+
 fn hide_injected_params(parameters: &mut Value, params: &Map<String, Value>) {
     let Some(schema) = parameters.as_object_mut() else {
         return;
@@ -75,6 +63,7 @@ fn hide_injected_params(parameters: &mut Value, params: &Map<String, Value>) {
         });
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +71,7 @@ mod tests {
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
+
     #[derive(Debug, Deserialize, JsonSchema, Serialize)]
     struct EchoArgs {
         text: Option<String>,
@@ -109,30 +99,24 @@ mod tests {
             Ok(args)
         }
     }
-    fn test_injection() -> Injection {
-        Injection::new().value(CWD_PARAM, "/tmp/project").value(
-            "memory",
+
+    fn test_params() -> Map<String, Value> {
+        let mut params = Map::new();
+        params.insert(CWD_PARAM.into(), "/tmp/project".into());
+        params.insert(
+            "memory".into(),
             json!({
                 "project": "togi",
                 "rule": "important runtime facts are injected, not guessed"
             }),
-        )
-    }
-    #[tokio::test]
-    async fn inject_returns_single_tool_for_single_input() {
-        let tool: Box<dyn ToolDyn> = inject(test_injection(), Echo);
-        let output = tool.call(r#"{"text":"hello"}"#.to_string()).await.unwrap();
-        let output: EchoArgs = serde_json::from_str(&output).unwrap();
-        assert_eq!(output.text.as_deref(), Some("hello"));
-        assert_eq!(output.cwd, "/tmp/project");
-        assert_eq!(output.memory["project"], "togi");
-    }
-    #[tokio::test]
-    async fn inject_returns_tool_vec_for_vec_input() {
-        let tools: Vec<Box<dyn ToolDyn>> = inject(
-            test_injection(),
-            vec![Box::new(Echo) as Box<dyn ToolDyn>, Box::new(Echo)],
         );
+        params
+    }
+
+    #[tokio::test]
+    async fn inject_adds_hidden_params_to_tool_calls() {
+        let tools: Vec<Box<dyn ToolDyn>> =
+            inject(test_params(), vec![Box::new(Echo) as Box<dyn ToolDyn>, Box::new(Echo)]);
         assert_eq!(tools.len(), 2);
         for tool in tools {
             let output = tool.call("null".to_string()).await.unwrap();
@@ -144,9 +128,11 @@ mod tests {
             );
         }
     }
+
     #[tokio::test]
     async fn injected_values_override_model_arguments() {
-        let tool = inject(test_injection(), Echo);
+        let tool: Box<dyn ToolDyn> =
+            inject(test_params(), vec![Box::new(Echo)]).pop().unwrap();
         let output = tool
             .call(
                 json!({
@@ -162,9 +148,11 @@ mod tests {
         assert_eq!(output.cwd, "/tmp/project");
         assert_eq!(output.memory["project"], "togi");
     }
+
     #[tokio::test]
     async fn definition_hides_all_injected_params() {
-        let tool = inject(test_injection(), Echo);
+        let tool: Box<dyn ToolDyn> =
+            inject(test_params(), vec![Box::new(Echo)]).pop().unwrap();
         let definition = rig::tool::tool_definition(&*tool);
         let properties = definition.parameters["properties"].as_object().unwrap();
         let required = definition.parameters["required"].as_array().unwrap();

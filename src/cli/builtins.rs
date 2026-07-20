@@ -1,5 +1,5 @@
 use crate::shared::error::TogiError;
-use crate::store::{MessageStore, SessionMeta};
+use crate::store::{HistoryStore, SessionMeta};
 use crate::ui::interaction::OutputItem;
 use rig::message::Message;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ pub async fn handle_command(
     line: &str,
     tx: mpsc::UnboundedSender<OutputItem>,
     history: &Arc<RwLock<Arc<[Message]>>>,
-    store: Option<&Arc<dyn MessageStore>>,
+    store: Option<&Arc<HistoryStore>>,
     session_id: &Arc<RwLock<Arc<str>>>,
 ) -> bool {
     // 先拆分命令和参数
@@ -232,7 +232,7 @@ pub async fn handle_command(
 }
 
 /// 将会话编号（1-based）或会话 ID 解析为实际会话 ID。
-async fn resolve_session_id(store: &Arc<dyn MessageStore>, arg: &str) -> Result<String, String> {
+async fn resolve_session_id(store: &Arc<HistoryStore>, arg: &str) -> Result<String, String> {
     // 如果是纯数字，按编号解析
     if let Ok(n) = arg.parse::<usize>() {
         if n == 0 {

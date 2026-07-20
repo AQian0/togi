@@ -145,36 +145,6 @@ pub enum ModifyError {
     },
 }
 
-impl edit::EditFailure for ModifyError {
-    fn empty_old_text() -> Self {
-        Self::EmptyOldText
-    }
-
-    fn old_text_not_found(
-        path: String,
-        message: String,
-        suggestion: Option<edit::Suggestion>,
-    ) -> Self {
-        Self::OldTextNotFound {
-            path,
-            message,
-            suggestion,
-        }
-    }
-
-    fn old_text_not_unique(path: String, message: String, lines: String) -> Self {
-        Self::OldTextNotUnique {
-            path,
-            message,
-            lines,
-        }
-    }
-
-    fn overlapping_edits(path: String) -> Self {
-        Self::OverlappingEdits { path }
-    }
-}
-
 impl atomic::AtomicWriteFailure for ModifyError {
     fn from_atomic_io(source: std::io::Error, display: &str) -> Self {
         Modify::map_io(source, display)

@@ -9,13 +9,6 @@ use tokio::io::AsyncReadExt;
 
 const FUZZY_MAX_DISTANCE_RATIO: f64 = 0.5;
 
-pub(super) trait EditFailure: Sized {
-    fn empty_old_text() -> Self;
-    fn old_text_not_found(path: String, message: String, suggestion: Option<Suggestion>) -> Self;
-    fn old_text_not_unique(path: String, message: String, lines: String) -> Self;
-    fn overlapping_edits(path: String) -> Self;
-}
-
 /// `old_text` 未命中时的相似行建议。
 ///
 /// `render_en` 拼进 `Display`（面向模型的英文描述）；`render_localized`
@@ -140,7 +133,7 @@ async fn apply_edits_blocking(
                 new: new.as_str(),
             })
             .collect();
-        let updated = apply_edits::<ModifyError>(&content, &replacements, &display_owned)?;
+        let updated = apply_edits(&content, &replacements, &display_owned)?;
         Ok((content, updated))
     })
     .await
@@ -201,18 +194,15 @@ fn collect_match_lines(content: &str, needle: &str) -> Vec<usize> {
     positions
 }
 
-pub(super) fn apply_edits<E>(
+pub(super) fn apply_edits(
     content: &str,
     edits: &[Replacement<'_>],
     display: &str,
-) -> Result<String, E>
-where
-    E: EditFailure,
-{
+) -> Result<String, ModifyError> {
     let mut spans: Vec<(usize, usize, &str)> = Vec::with_capacity(edits.len());
     for edit in edits {
         if edit.old.is_empty() {
-            return Err(E::empty_old_text());
+            return Err(ModifyError::EmptyOldText);
         }
         let start = content.find(edit.old).ok_or_else(|| {
             let suggestion = find_similar(content, edit.old);
@@ -224,7 +214,11 @@ where
                 msg.push(' ');
                 msg.push_str(&s.render_en());
             }
-            E::old_text_not_found(display.to_string(), msg, suggestion)
+            ModifyError::OldTextNotFound {
+                path: display.to_string(),
+                message: msg,
+                suggestion,
+            }
         })?;
         if let Some(dup) = content[start + edit.old.len()..].find(edit.old) {
             let tail = &content[start + edit.old.len() + dup + edit.old.len()..];
@@ -236,22 +230,24 @@ where
                 .map(usize::to_string)
                 .collect::<Vec<_>>()
                 .join(", ");
-            return Err(E::old_text_not_unique(
-                display.to_string(),
-                format!(
+            return Err(ModifyError::OldTextNotUnique {
+                path: display.to_string(),
+                message: format!(
                     "`old_text` matched {total} times in `{display}` at lines \
                      [{pos_str}]; it must match exactly once. Add more surrounding \
                      context to make it unique."
                 ),
-                pos_str,
-            ));
+                lines: pos_str,
+            });
         }
         spans.push((start, start + edit.old.len(), edit.new));
     }
     spans.sort_by_key(|(start, _, _)| *start);
     for (prev, next) in spans.iter().tuple_windows() {
         if prev.1 > next.0 {
-            return Err(E::overlapping_edits(display.to_string()));
+            return Err(ModifyError::OverlappingEdits {
+                path: display.to_string(),
+            });
         }
     }
     let mut out = String::with_capacity(content.len());
@@ -377,40 +373,6 @@ pub(super) async fn edit_file(
 mod tests {
     use super::*;
 
-    #[derive(Debug, thiserror::Error)]
-    enum TestEditError {
-        #[error("empty old text")]
-        EmptyOldText,
-        #[error("{message}")]
-        OldTextNotFound { path: String, message: String },
-        #[error("{message}")]
-        OldTextNotUnique { path: String, message: String },
-        #[error("overlapping edits in `{path}`")]
-        OverlappingEdits { path: String },
-    }
-
-    impl EditFailure for TestEditError {
-        fn empty_old_text() -> Self {
-            Self::EmptyOldText
-        }
-
-        fn old_text_not_found(
-            path: String,
-            message: String,
-            _suggestion: Option<Suggestion>,
-        ) -> Self {
-            Self::OldTextNotFound { path, message }
-        }
-
-        fn old_text_not_unique(path: String, message: String, _lines: String) -> Self {
-            Self::OldTextNotUnique { path, message }
-        }
-
-        fn overlapping_edits(path: String) -> Self {
-            Self::OverlappingEdits { path }
-        }
-    }
-
     #[test]
     fn apply_edits_should_replace_unique_text() {
         let edits = [Replacement {
@@ -418,7 +380,7 @@ mod tests {
             new: "BETA",
         }];
 
-        let updated = apply_edits::<TestEditError>("alpha beta gamma", &edits, "test.txt").unwrap();
+        let updated = apply_edits("alpha beta gamma", &edits, "test.txt").unwrap();
 
         assert_eq!(updated, "alpha BETA gamma");
     }
@@ -436,7 +398,7 @@ mod tests {
             },
         ];
 
-        let updated = apply_edits::<TestEditError>("alpha beta gamma", &edits, "test.txt").unwrap();
+        let updated = apply_edits("alpha beta gamma", &edits, "test.txt").unwrap();
 
         assert_eq!(updated, "A beta G");
     }
@@ -454,11 +416,11 @@ mod tests {
             },
         ];
 
-        let result = apply_edits::<TestEditError>("abcdef", &edits, "test.txt");
+        let result = apply_edits("abcdef", &edits, "test.txt");
 
         assert!(matches!(
             result,
-            Err(TestEditError::OverlappingEdits { .. })
+            Err(ModifyError::OverlappingEdits { .. })
         ));
     }
 
@@ -469,11 +431,11 @@ mod tests {
             new: "",
         }];
 
-        let result = apply_edits::<TestEditError>("dup dup", &edits, "test.txt");
+        let result = apply_edits("dup dup", &edits, "test.txt");
 
         assert!(matches!(
             result,
-            Err(TestEditError::OldTextNotUnique { .. })
+            Err(ModifyError::OldTextNotUnique { .. })
         ));
     }
 
@@ -484,7 +446,7 @@ mod tests {
             new: "",
         }];
 
-        let result = apply_edits::<TestEditError>(
+        let result = apply_edits(
             "fn main() {\n    println!(\"hello\");\n}\n",
             &edits,
             "test.txt",
@@ -504,7 +466,7 @@ mod tests {
             new: "",
         }];
 
-        let result = apply_edits::<TestEditError>(
+        let result = apply_edits(
             "line one\ndup target\nline three\ndup target\nline five\n",
             &edits,
             "test.txt",

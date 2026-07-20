@@ -1,10 +1,10 @@
 use crate::agent::DynamicAgent;
 use crate::cli::command::Args;
-use crate::pipeline::inject::{CWD_PARAM, Injection, inject};
+use crate::pipeline::inject::{CWD_PARAM, inject};
 use crate::pipeline::paginate::paginate;
 use crate::shared::constants;
 use crate::shared::error::TogiError;
-use crate::store::{HistoryStore, MessageStore};
+use crate::store::HistoryStore;
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
@@ -29,7 +29,7 @@ type SessionId = Arc<RwLock<Arc<str>>>;
 struct AppController {
     agent: Arc<DynamicAgent>,
     history: History,
-    store: Option<Arc<dyn MessageStore>>,
+    store: Option<Arc<HistoryStore>>,
     session_id: SessionId,
     registry: Arc<ToolRegistry>,
     cancel_tx: watch::Sender<bool>,
@@ -41,7 +41,7 @@ impl AppController {
     fn new(
         agent: Arc<DynamicAgent>,
         history: History,
-        store: Option<Arc<dyn MessageStore>>,
+        store: Option<Arc<HistoryStore>>,
         session_id: SessionId,
         registry: Arc<ToolRegistry>,
         cancel_tx: watch::Sender<bool>,
@@ -198,11 +198,10 @@ fn build_tools(cwd: &Path) -> (Vec<Box<dyn ToolDyn>>, ToolRegistry) {
     registry.register::<Modify>();
     registry.register::<Shell>();
 
-    let injected = Injection::new().value(CWD_PARAM, cwd.display().to_string());
     let tools = paginate(
         constants::DEFAULT_PAGE_LINES,
         inject(
-            injected,
+            serde_json::Map::from_iter([(CWD_PARAM.into(), cwd.display().to_string().into())]),
             vec![
                 Box::new(Read) as Box<dyn ToolDyn>,
                 Box::new(Modify),
@@ -246,7 +245,7 @@ fn build_agent(
 /// 初始化持久化存储并恢复上次会话的历史记录。
 ///
 /// 数据库不可用时静默降级为纯内存模式，不影响正常对话功能。
-async fn init_history() -> (History, Option<Arc<dyn MessageStore>>, SessionId) {
+async fn init_history() -> (History, Option<Arc<HistoryStore>>, SessionId) {
     let session_id: SessionId =
         Arc::new(RwLock::new(Arc::from(crate::store::default_session_id())));
     let Some(db_path) = crate::store::default_db_path() else {
@@ -258,7 +257,7 @@ async fn init_history() -> (History, Option<Arc<dyn MessageStore>>, SessionId) {
     };
     match HistoryStore::open(&db_path).await {
         Ok(store) => {
-            let store: Arc<dyn MessageStore> = Arc::new(store);
+            let store = Arc::new(store);
             let sid = session_id.read().await.clone();
             let messages = store.load(&sid).await.unwrap_or_else(|err| {
                 eprintln!(

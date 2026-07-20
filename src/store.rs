@@ -6,9 +6,7 @@
 use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
 use rig::message::Message;
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 
 /// 历史持久化错误。
 #[derive(Debug, thiserror::Error)]
@@ -65,8 +63,6 @@ impl TogiError for StoreError {
     }
 }
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
 /// 会话元数据。
 #[derive(Debug, Clone)]
 pub struct SessionMeta {
@@ -74,37 +70,6 @@ pub struct SessionMeta {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
-}
-
-/// 消息持久化操作接口。
-///
-/// 抽出 trait 便于测试时替换为内存实现，也为将来扩展（如跨会话搜索）留出余地。
-pub trait MessageStore: Send + Sync {
-    /// 加载指定会话的全部消息，按插入顺序返回。
-    fn load<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<Vec<Message>, StoreError>>;
-
-    /// 全量替换指定会话的消息历史。
-    fn save<'a>(
-        &'a self,
-        session_id: &'a str,
-        messages: &'a [Message],
-    ) -> BoxFuture<'a, Result<(), StoreError>>;
-
-    /// 清空指定会话的消息历史。
-    fn clear<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<(), StoreError>>;
-
-    /// 统计指定会话的消息条数。
-    #[allow(dead_code)]
-    fn count<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<usize, StoreError>>;
-
-    /// 列出所有会话，按最近更新时间降序。
-    fn list_sessions<'a>(&'a self) -> BoxFuture<'a, Result<Vec<SessionMeta>, StoreError>>;
-
-    /// 创建新会话，返回生成的会话 ID。
-    fn create_session<'a>(&'a self, title: &'a str) -> BoxFuture<'a, Result<String, StoreError>>;
-
-    /// 删除指定会话及其全部消息。
-    fn delete_session<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<(), StoreError>>;
 }
 
 /// 基于 Turso 本地数据库的消息持久化实现。
@@ -160,7 +125,8 @@ impl HistoryStore {
         &self.path
     }
 
-    async fn do_load(&self, session_id: &str) -> Result<Vec<Message>, StoreError> {
+    /// 加载指定会话的全部消息，按插入顺序返回。
+    pub async fn load(&self, session_id: &str) -> Result<Vec<Message>, StoreError> {
         let mut rows = self
             .conn
             .query(
@@ -183,10 +149,11 @@ impl HistoryStore {
         Ok(messages)
     }
 
-    async fn do_save(&self, session_id: &str, messages: &[Message]) -> Result<(), StoreError> {
-        // ponytail: 依赖“会话历史只增不改”的事实做增量写入，已存前缀跳过序列化和插入。
+    /// 全量替换指定会话的消息历史。
+    pub async fn save(&self, session_id: &str, messages: &[Message]) -> Result<(), StoreError> {
+        // ponytail: 依赖"会话历史只增不改"的事实做增量写入，已存前缀跳过序列化和插入。
         // 若未来加入历史压缩/重写功能，需退回全量替换。
-        let existing = self.do_count(session_id).await?;
+        let existing = self.count(session_id).await?;
         let tx = turso::transaction::Transaction::new_unchecked(
             &self.conn,
             turso::transaction::TransactionBehavior::Immediate,
@@ -242,7 +209,8 @@ impl HistoryStore {
         Ok(())
     }
 
-    async fn do_clear(&self, session_id: &str) -> Result<(), StoreError> {
+    /// 清空指定会话的消息历史。
+    pub async fn clear(&self, session_id: &str) -> Result<(), StoreError> {
         self.conn
             .execute("DELETE FROM messages WHERE session_id = ?1", [session_id])
             .await
@@ -250,7 +218,8 @@ impl HistoryStore {
         Ok(())
     }
 
-    async fn do_count(&self, session_id: &str) -> Result<usize, StoreError> {
+    /// 统计指定会话的消息条数。
+    pub async fn count(&self, session_id: &str) -> Result<usize, StoreError> {
         let mut rows = self
             .conn
             .query(
@@ -271,7 +240,8 @@ impl HistoryStore {
         }
     }
 
-    async fn do_list_sessions(&self) -> Result<Vec<SessionMeta>, StoreError> {
+    /// 列出所有会话，按最近更新时间降序。
+    pub async fn list_sessions(&self) -> Result<Vec<SessionMeta>, StoreError> {
         let mut rows = self
             .conn
             .query(
@@ -296,7 +266,8 @@ impl HistoryStore {
         Ok(sessions)
     }
 
-    async fn do_create_session(&self, title: &str) -> Result<String, StoreError> {
+    /// 创建新会话，返回生成的会话 ID。
+    pub async fn create_session(&self, title: &str) -> Result<String, StoreError> {
         let id = uuid::Uuid::new_v4().simple().to_string();
         self.conn
             .execute(
@@ -311,7 +282,8 @@ impl HistoryStore {
         Ok(id)
     }
 
-    async fn do_delete_session(&self, session_id: &str) -> Result<(), StoreError> {
+    /// 删除指定会话及其全部消息。
+    pub async fn delete_session(&self, session_id: &str) -> Result<(), StoreError> {
         self.conn
             .execute("DELETE FROM messages WHERE session_id = ?1", [session_id])
             .await
@@ -321,40 +293,6 @@ impl HistoryStore {
             .await
             .map_err(|source| StoreError::Query { source })?;
         Ok(())
-    }
-}
-
-impl MessageStore for HistoryStore {
-    fn load<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<Vec<Message>, StoreError>> {
-        Box::pin(self.do_load(session_id))
-    }
-
-    fn save<'a>(
-        &'a self,
-        session_id: &'a str,
-        messages: &'a [Message],
-    ) -> BoxFuture<'a, Result<(), StoreError>> {
-        Box::pin(self.do_save(session_id, messages))
-    }
-
-    fn clear<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<(), StoreError>> {
-        Box::pin(self.do_clear(session_id))
-    }
-
-    fn count<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<usize, StoreError>> {
-        Box::pin(self.do_count(session_id))
-    }
-
-    fn list_sessions<'a>(&'a self) -> BoxFuture<'a, Result<Vec<SessionMeta>, StoreError>> {
-        Box::pin(self.do_list_sessions())
-    }
-
-    fn create_session<'a>(&'a self, title: &'a str) -> BoxFuture<'a, Result<String, StoreError>> {
-        Box::pin(self.do_create_session(title))
-    }
-
-    fn delete_session<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<(), StoreError>> {
-        Box::pin(self.do_delete_session(session_id))
     }
 }
 

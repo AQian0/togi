@@ -10,11 +10,14 @@ pub fn inject_cwd<T>(cwd: impl AsRef<Path>, tool: T) -> Box<dyn ToolDyn>
 where
     T: ToolDyn + 'static,
 {
-    togi::inject::inject(
-        togi::inject::Injection::new()
-            .value(togi::inject::CWD_PARAM, cwd.as_ref().display().to_string()),
-        tool,
-    )
+    let mut params = serde_json::Map::new();
+    params.insert(
+        togi::pipeline::inject::CWD_PARAM.into(),
+        cwd.as_ref().display().to_string().into(),
+    );
+    togi::pipeline::inject::inject(params, vec![Box::new(tool) as Box<dyn ToolDyn>])
+        .pop()
+        .unwrap()
 }
 
 pub struct TestDir {

@@ -1,6 +1,6 @@
 use rig::OneOrMany;
 use rig::message::{AssistantContent, Message, UserContent};
-use togi::store::{HistoryStore, MessageStore};
+use togi::store::HistoryStore;
 
 fn user_msg(text: &str) -> Message {
     Message::User {
