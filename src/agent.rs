@@ -439,6 +439,7 @@ fn ensure_section(current: &mut AgentSection, target: AgentSection, tx: &AgentEv
 /// 最大尝试次数（含首次请求）。
 const MAX_ATTEMPTS: u32 = 3;
 
+#[tracing::instrument(skip_all, fields(input_len = input.len(), history_len = history.len()))]
 pub async fn stream_chat<M: CompletionModel + 'static>(
     agent: &rig::agent::Agent<M>,
     input: &str,
@@ -484,6 +485,7 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                     && is_context_overflow(&failure.source)
                 {
                     overflow_retried = true;
+                    tracing::debug!("context overflow, forcing compaction retry");
                     let mut rt = active_ctx.runtime.lock().await;
                     rt.force_compaction = true;
                     rt.overflow_error = Some(failure.source.to_string());
@@ -495,8 +497,10 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                 let RetryDecision::Retry { delay } =
                     retry_decision(&failure.source, failure.saw_tool_call, attempt)
                 else {
+                    tracing::debug!(attempt, error = %failure.source, "giving up: not retryable");
                     return Err(failure);
                 };
+                tracing::debug!(attempt, delay_ms = delay.as_millis() as u64, error = %failure.source, "transient error, retrying");
                 let _ = tx.send(AgentEvent::Notice(crate::t!(
                     "agent-retrying",
                     attempt = attempt + 1,
@@ -526,6 +530,7 @@ fn stall_failure(
     history: &[Message],
     waited: Duration,
 ) -> TurnFailure {
+    tracing::debug!(waited_ms = waited.as_millis() as u64, "stream stalled");
     let saw_tool_call = partial.saw_tool_call;
     TurnFailure {
         source: AgentError::Stalled {
@@ -613,6 +618,12 @@ async fn stream_once<M: CompletionModel + 'static>(
                     tool_call,
                     internal_call_id,
                 } => {
+                    tracing::debug!(
+                        name = %tool_call.function.name,
+                        arguments = %tool_call.function.arguments,
+                        call_id = %internal_call_id,
+                        "tool call"
+                    );
                     pending_tool_calls = pending_tool_calls.saturating_add(1);
                     partial.push_tool_call(tool_call.clone());
                     let _ = tx.send(AgentEvent::ToolCall {
@@ -643,6 +654,7 @@ async fn stream_once<M: CompletionModel + 'static>(
                         _ => None,
                     })
                     .join("\n");
+                tracing::debug!(call_id = %internal_call_id, result_len = text.len(), "tool result");
                 let _ = tx.send(AgentEvent::ToolResult {
                     text,
                     internal_call_id,
@@ -663,6 +675,7 @@ async fn stream_once<M: CompletionModel + 'static>(
                 if let Some(active) = active_ctx
                     && let Some(input_tokens) = crate::context::effective_input_tokens(&call.usage)
                 {
+                    tracing::trace!(input_tokens, "completion usage");
                     let mut rt = active.runtime.lock().await;
                     rt.usage = Some(UsageSample {
                         input_tokens,
@@ -672,6 +685,7 @@ async fn stream_once<M: CompletionModel + 'static>(
             }
             Some(Ok(_)) => {}
             Some(Err(err)) => {
+                tracing::error!(error = %err, "stream error");
                 let saw_tool_call = partial.saw_tool_call;
                 let history = match canonical_history(&err) {
                     Some(h) => h,
@@ -773,6 +787,7 @@ impl<M: CompletionModel> AgentHook<M> for ContextHook<M> {
                 );
                 match summarize(self.model.as_ref(), &self.policy, input).await {
                     Ok(summary) => {
+                        tracing::debug!(covered = k, previous = covered, "context compacted");
                         // 摘要成功后原子更新 summary 与 covered_messages。
                         rt.checkpoint = ContextCheckpoint {
                             summary: Some(summary),
@@ -788,6 +803,7 @@ impl<M: CompletionModel> AgentHook<M> for ContextHook<M> {
                         Flow::patch_request(RequestPatch::new().history(active))
                     }
                     Err(err) => {
+                        tracing::error!(error = %err, "context compaction failed");
                         // 摘要失败：checkpoint 不推进，按原活动历史发送；
                         // 若 provider 随后溢出，由 overflow 恢复路径处理。
                         let _ = self.tx.send(AgentEvent::Notice(crate::t!(
@@ -893,6 +909,7 @@ macro_rules! providers {
                                     source,
                                 })?
                             };
+                            tracing::debug!(model, provider = stringify!($variant), "agent built");
                             let inner = Arc::new(
                                 client.agent(model)
                                     .preamble(preamble)

@@ -8703,6 +8703,8 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml",
+ "tracing",
+ "tracing-subscriber",
  "turso",
  "unic-langid",
  "unicode-width 0.2.2",

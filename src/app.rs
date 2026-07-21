@@ -97,6 +97,7 @@ impl AppController {
         {
             let hist = self.history.read().await;
             if let Err(err) = store.save(session_id, &hist).await {
+                tracing::error!(error = %err.user_message(), "history save failed");
                 let _ = tx.send(OutputItem::Notice(crate::t!(
                     "store-save-error",
                     error = err.user_message()
@@ -108,6 +109,7 @@ impl AppController {
             return;
         }
         if let Err(err) = store.save_context(session_id, &checkpoint).await {
+            tracing::error!(error = %err.user_message(), "context save failed");
             let _ = tx.send(OutputItem::Notice(crate::t!(
                 "context-save-error",
                 error = err.user_message()
@@ -140,6 +142,7 @@ impl AppController {
         }
 
         let session_id = self.session_id.read().await.clone();
+        tracing::debug!(session = %session_id, input_len = message.len(), "submission started");
         let hist = Arc::clone(&*self.history.read().await);
         let _ = self.cancel_tx.send_replace(false);
         let cancel_rx = self.cancel_tx.subscribe();
@@ -186,6 +189,7 @@ impl AppController {
         };
         match result {
             Ok(outcome) => {
+                tracing::debug!(messages = outcome.history.len(), "submission completed");
                 *self.history.write().await = Arc::from(outcome.history);
                 *self.context.write().await = outcome.context;
                 self.persist_history(&session_id, &tx).await;
@@ -193,6 +197,7 @@ impl AppController {
             }
             Err(failure) => {
                 // 失败同样保留并落盘部分历史：已完成的工具往返对后续对话有效。
+                tracing::error!(error = %failure.source, "submission failed");
                 *self.history.write().await = Arc::from(failure.history);
                 *self.context.write().await = failure.context;
                 self.persist_history(&session_id, &tx).await;
@@ -336,6 +341,7 @@ async fn init_history() -> (
                 );
                 crate::store::LoadReport::default()
             });
+            tracing::debug!(session = %sid, messages = report.messages.len(), dropped = report.dropped_rows, "history loaded");
             if report.dropped_rows > 0 {
                 eprintln!(
                     "{}",
@@ -364,6 +370,7 @@ async fn init_history() -> (
             )
         }
         Err(err) => {
+            tracing::error!(path = %db_path.display(), error = %err.user_message(), "store open failed");
             eprintln!(
                 "{}",
                 crate::t!(
@@ -393,6 +400,7 @@ pub async fn run() -> crate::shared::error::Result<()> {
         context: crate::t!("app-context-get-cwd"),
         source,
     })?;
+    tracing::debug!(cwd = %cwd.display(), model = ?args.model, "app starting");
     let (tools, registry) = build_tools(&cwd);
     let agent = Arc::new(build_agent(&args, &config, tools)?);
     let (history, store, session_id, context) = init_history().await;
@@ -422,6 +430,7 @@ pub async fn run() -> crate::shared::error::Result<()> {
             )
             .await;
         if let Err(e) = result {
+            tracing::error!(error = %crate::shared::error::TogiError::user_message(&e), "session error");
             eprintln!(
                 "{}",
                 crate::t!(
@@ -431,6 +440,7 @@ pub async fn run() -> crate::shared::error::Result<()> {
             );
         }
         if let Err(e) = session.save_history() {
+            tracing::error!(error = %crate::shared::error::TogiError::user_message(&e), "history save failed");
             eprintln!(
                 "{}",
                 crate::t!(

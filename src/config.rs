@@ -154,21 +154,12 @@ impl Config {
                         path: candidate.clone(),
                         source,
                     })?;
-                if log_enabled() {
-                    eprintln!(
-                        "{}",
-                        crate::t!("config-loaded", path = candidate.display().to_string())
-                    );
-                }
+                tracing::debug!(path = %candidate.display(), "config loaded");
                 return Ok(config);
             }
         }
         Ok(Config::default())
     }
-}
-
-fn log_enabled() -> bool {
-    std::env::var(constants::ENV_LOG_CONFIG).is_ok()
 }
 
 fn candidate_paths() -> impl Iterator<Item = std::path::PathBuf> {

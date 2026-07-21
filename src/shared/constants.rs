@@ -163,9 +163,6 @@ pub(crate) const WINDOWS_CONFIG_FILENAME: &str = "config.toml";
 /// Windows 配置目录名。
 pub(crate) const APP_DIR_NAME: &str = "togi";
 
-/// 控制配置加载日志的环境变量。
-pub(crate) const ENV_LOG_CONFIG: &str = "TOGI_LOG_CONFIG";
-
 /// 自定义历史文件路径的环境变量。
 pub(crate) const ENV_HISTORY_PATH: &str = "TOGI_HISTORY";
 
