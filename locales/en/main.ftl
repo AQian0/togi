@@ -104,6 +104,16 @@ error-modify-io = IO error while modifying `{ $path }`: { $error }
 app-io-error = IO error during { $context }: { $error }
 config-read-error = Could not read config file { $path }: { $error }
 config-parse-error = Failed to parse config file { $path }: { $error }
+config-context-reserve-too-big = Invalid [context] config: reserve_tokens ({ $reserve }) must be smaller than window_tokens ({ $window })
+config-context-keep-too-big = Invalid [context] config: keep_recent_tokens ({ $keep }) must be smaller than window_tokens - reserve_tokens ({ $available })
+
+# ── Context window ─────────────────────────────────────────────────
+context-compacted = Context compacted: { $count } earlier messages folded into the rolling summary.
+context-compact-failed = Context compaction failed: { $error } (continuing with current context)
+context-compact-impossible = Context window exceeded and no safe compaction point exists ({ $error }); /clear or start a new session.
+context-overflow-retry = Provider reported context window overflow; compacting history and retrying…
+context-save-error = Could not save context checkpoint: { $error }
+context-load-error = Could not load context checkpoint: { $error }
 
 # ── Conversation ─────────────────────────────────────────────────────
 conv-user-label = You

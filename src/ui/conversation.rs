@@ -305,7 +305,7 @@ impl Conversation {
                         let blk = block_reasoning();
                         self.md_block = Some(blk);
                         self.items.push(ConvItem::Line(ConvLine::block(
-                            &crate::t!("conv-reasoning-label"),
+                            crate::t!("conv-reasoning-label"),
                             style::thinking_block(),
                             blk,
                         )));
@@ -314,7 +314,7 @@ impl Conversation {
                         let blk = block_answer();
                         self.md_block = Some(blk);
                         self.items.push(ConvItem::Line(ConvLine::block(
-                            &crate::t!("conv-answer-label"),
+                            crate::t!("conv-answer-label"),
                             style::assistant_block(),
                             blk,
                         )));
@@ -356,7 +356,7 @@ impl Conversation {
                 let total = lines.len();
                 if total == 0 || (total == 1 && lines[0].trim().is_empty()) {
                     self.items.push(ConvItem::Line(ConvLine::block(
-                        &crate::t!("conv-empty-output"),
+                        crate::t!("conv-empty-output"),
                         style::tool_result_block(),
                         blk,
                     )));

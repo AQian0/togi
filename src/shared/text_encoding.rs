@@ -76,7 +76,7 @@ pub(crate) fn decode_text(
         .or_else(|| bom.map(|(encoding, _)| encoding))
         .unwrap_or(UTF_8);
     let bom_len = bom
-        .filter(|(bom_encoding, _)| same_encoding(*bom_encoding, encoding))
+        .filter(|(bom_encoding, _)| same_encoding(bom_encoding, encoding))
         .map_or(0, |(_, len)| len);
     let bom_bytes = if bom_len > 0 {
         bom_for_encoding(encoding)

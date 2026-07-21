@@ -418,10 +418,7 @@ mod tests {
 
         let result = apply_edits("abcdef", &edits, "test.txt");
 
-        assert!(matches!(
-            result,
-            Err(ModifyError::OverlappingEdits { .. })
-        ));
+        assert!(matches!(result, Err(ModifyError::OverlappingEdits { .. })));
     }
 
     #[test]
@@ -433,10 +430,7 @@ mod tests {
 
         let result = apply_edits("dup dup", &edits, "test.txt");
 
-        assert!(matches!(
-            result,
-            Err(ModifyError::OldTextNotUnique { .. })
-        ));
+        assert!(matches!(result, Err(ModifyError::OldTextNotUnique { .. })));
     }
 
     #[test]

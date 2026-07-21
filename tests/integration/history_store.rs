@@ -1,5 +1,6 @@
 use rig::OneOrMany;
 use rig::message::{AssistantContent, Message, UserContent};
+use togi::context::ContextCheckpoint;
 use togi::store::HistoryStore;
 
 fn user_msg(text: &str) -> Message {
@@ -131,4 +132,165 @@ async fn count_empty_session_returns_zero() {
     let db_path = dir.path().join("test.db");
     let store = HistoryStore::open(&db_path).await.unwrap();
     assert_eq!(store.count("nonexistent").await.unwrap(), 0);
+}
+
+// ── 上下文 checkpoint ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn context_checkpoint_roundtrip() {
+    let dir = crate::support::TestDir::new();
+    let db_path = dir.path().join("test.db");
+    let store = HistoryStore::open(&db_path).await.unwrap();
+    store.save("default", &sample_conversation()).await.unwrap();
+
+    assert_eq!(
+        store.load_context("default").await.unwrap(),
+        ContextCheckpoint::default()
+    );
+    let checkpoint = ContextCheckpoint {
+        summary: Some("前半部分摘要".into()),
+        covered_messages: 2,
+    };
+    store.save_context("default", &checkpoint).await.unwrap();
+    assert_eq!(store.load_context("default").await.unwrap(), checkpoint);
+}
+
+#[tokio::test]
+async fn context_checkpoint_survives_reopen() {
+    let dir = crate::support::TestDir::new();
+    let db_path = dir.path().join("test.db");
+    let checkpoint = ContextCheckpoint {
+        summary: Some("重启前的摘要".into()),
+        covered_messages: 2,
+    };
+    {
+        let store = HistoryStore::open(&db_path).await.unwrap();
+        store.save("default", &sample_conversation()).await.unwrap();
+        store.save_context("default", &checkpoint).await.unwrap();
+    }
+    {
+        // 重新打开（旧数据库自动创建新表）后 checkpoint 与 transcript 都在
+        let store = HistoryStore::open(&db_path).await.unwrap();
+        assert_eq!(store.load_context("default").await.unwrap(), checkpoint);
+        assert_eq!(store.load("default").await.unwrap().len(), 4);
+    }
+}
+
+#[tokio::test]
+async fn summary_does_not_change_transcript() {
+    let dir = crate::support::TestDir::new();
+    let db_path = dir.path().join("test.db");
+    let store = HistoryStore::open(&db_path).await.unwrap();
+    let msgs = sample_conversation();
+    store.save("default", &msgs).await.unwrap();
+    let before = store.load("default").await.unwrap();
+    store
+        .save_context(
+            "default",
+            &ContextCheckpoint {
+                summary: Some("摘要".into()),
+                covered_messages: 3,
+            },
+        )
+        .await
+        .unwrap();
+    // 完整 transcript 不因摘要 checkpoint 改变
+    let after = store.load("default").await.unwrap();
+    assert_eq!(before, after);
+    assert_eq!(after.len(), 4);
+}
+
+#[tokio::test]
+async fn context_checkpoints_are_isolated_between_sessions() {
+    let dir = crate::support::TestDir::new();
+    let db_path = dir.path().join("test.db");
+    let store = HistoryStore::open(&db_path).await.unwrap();
+    store.save("s1", &sample_conversation()).await.unwrap();
+    store.save("s2", &sample_conversation()).await.unwrap();
+    store
+        .save_context(
+            "s1",
+            &ContextCheckpoint {
+                summary: Some("s1 摘要".into()),
+                covered_messages: 2,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.load_context("s2").await.unwrap(),
+        ContextCheckpoint::default()
+    );
+    assert_eq!(store.load_context("s1").await.unwrap().covered_messages, 2);
+}
+
+#[tokio::test]
+async fn clear_context_removes_checkpoint_but_keeps_messages() {
+    let dir = crate::support::TestDir::new();
+    let db_path = dir.path().join("test.db");
+    let store = HistoryStore::open(&db_path).await.unwrap();
+    store.save("default", &sample_conversation()).await.unwrap();
+    store
+        .save_context(
+            "default",
+            &ContextCheckpoint {
+                summary: Some("摘要".into()),
+                covered_messages: 2,
+            },
+        )
+        .await
+        .unwrap();
+    store.clear_context("default").await.unwrap();
+    assert_eq!(
+        store.load_context("default").await.unwrap(),
+        ContextCheckpoint::default()
+    );
+    assert_eq!(store.count("default").await.unwrap(), 4);
+}
+
+#[tokio::test]
+async fn delete_session_removes_context_checkpoint() {
+    let dir = crate::support::TestDir::new();
+    let db_path = dir.path().join("test.db");
+    let store = HistoryStore::open(&db_path).await.unwrap();
+    let id = store.create_session("待删除").await.unwrap();
+    store.save(&id, &[user_msg("hello")]).await.unwrap();
+    store
+        .save_context(
+            &id,
+            &ContextCheckpoint {
+                summary: Some("摘要".into()),
+                covered_messages: 1,
+            },
+        )
+        .await
+        .unwrap();
+    store.delete_session(&id).await.unwrap();
+    assert_eq!(
+        store.load_context(&id).await.unwrap(),
+        ContextCheckpoint::default()
+    );
+}
+
+#[tokio::test]
+async fn invalid_covered_messages_auto_invalidates() {
+    let dir = crate::support::TestDir::new();
+    let db_path = dir.path().join("test.db");
+    let store = HistoryStore::open(&db_path).await.unwrap();
+    store.save("default", &[user_msg("only")]).await.unwrap();
+    store
+        .save_context(
+            "default",
+            &ContextCheckpoint {
+                summary: Some("失效摘要".into()),
+                covered_messages: 10,
+            },
+        )
+        .await
+        .unwrap();
+    // 覆盖位置超过消息数量：加载时丢弃该 checkpoint
+    assert_eq!(
+        store.load_context("default").await.unwrap(),
+        ContextCheckpoint::default()
+    );
 }

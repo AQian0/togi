@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod app;
 pub mod config;
+pub mod context;
 pub mod shared;
 pub mod store;
 pub mod tools;

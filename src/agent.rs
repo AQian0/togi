@@ -1,9 +1,14 @@
+use crate::context::{
+    ContextCheckpoint, ContextInput, ContextPolicy, ContextRuntime, Decision, UsageSample,
+};
 use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
 use futures::StreamExt;
 use itertools::Itertools;
 use rig::OneOrMany;
-use rig::agent::MultiTurnStreamItem;
+use rig::agent::{
+    AgentHook, Flow, HookContext, MultiTurnStreamItem, RequestPatch, StepEvent, StepEventKind,
+};
 use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::CompletionModel;
 use rig::completion::message::ToolResultContent;
@@ -14,7 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{Mutex, watch};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -111,8 +116,18 @@ pub enum AgentSection {
 pub struct TurnFailure {
     pub source: AgentError,
     pub history: Vec<Message>,
+    /// 失败时的上下文 checkpoint：取消、provider 错误或部分工具轮次后
+    /// 仍能保存有效的压缩状态。
+    pub context: ContextCheckpoint,
     /// 本轮失败前是否见过工具调用——见过则副作用可能已发生，不可安全重试。
     saw_tool_call: bool,
+}
+
+/// 一次提交的结果：完整历史 + 上下文 checkpoint。
+#[derive(Debug)]
+pub struct ChatOutcome {
+    pub history: Vec<Message>,
+    pub context: ContextCheckpoint,
 }
 
 #[derive(Debug, Clone)]
@@ -136,8 +151,15 @@ pub enum AgentEvent {
 }
 
 type AgentEventSender = tokio::sync::mpsc::UnboundedSender<AgentEvent>;
-type ChatFuture = Pin<Box<dyn Future<Output = Result<Vec<Message>, TurnFailure>> + Send>>;
-type ChatFn = dyn Fn(String, Arc<[Message]>, AgentEventSender, watch::Receiver<bool>, u32) -> ChatFuture
+type ChatFuture = Pin<Box<dyn Future<Output = Result<ChatOutcome, TurnFailure>> + Send>>;
+type ChatFn = dyn Fn(
+        String,
+        Arc<[Message]>,
+        ContextInput,
+        AgentEventSender,
+        watch::Receiver<bool>,
+        u32,
+    ) -> ChatFuture
     + Send
     + Sync;
 
@@ -364,6 +386,50 @@ fn cancel_return(
     partial.finish(input, history)
 }
 
+/// 单次提交内激活的上下文管理：策略 + 跨重试共享的运行期状态。
+struct ActiveContext {
+    policy: ContextPolicy,
+    runtime: Arc<Mutex<ContextRuntime>>,
+}
+
+/// 提取运行期 checkpoint；上下文管理未启用时透传输入 checkpoint。
+async fn current_checkpoint(
+    active: &Option<ActiveContext>,
+    fallback: &ContextCheckpoint,
+) -> ContextCheckpoint {
+    match active {
+        Some(active) => active.runtime.lock().await.checkpoint.clone(),
+        None => fallback.clone(),
+    }
+}
+
+/// 上下文溢出错误的常见 provider 文本特征。
+const OVERFLOW_PATTERNS: &[&str] = &[
+    "context_length_exceeded",
+    "maximum context length",
+    "context window",
+    "prompt too long",
+    "too many tokens",
+];
+
+/// 判断错误是否为 provider 的上下文窗口溢出（依据错误文本，含响应 body）。
+fn is_context_overflow(err: &AgentError) -> bool {
+    let AgentError::Stream { source } = err else {
+        return false;
+    };
+    let mut text = source.to_string();
+    let body = match source {
+        rig::agent::StreamingError::Completion(e) => e.provider_response_body(),
+        rig::agent::StreamingError::Prompt(e) => e.provider_response_body(),
+        _ => None,
+    };
+    if let Some(body) = body {
+        text.push_str(body);
+    }
+    let text = text.to_lowercase();
+    OVERFLOW_PATTERNS.iter().any(|p| text.contains(p))
+}
+
 fn ensure_section(current: &mut AgentSection, target: AgentSection, tx: &AgentEventSender) {
     if *current != target {
         *current = target;
@@ -377,15 +443,55 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
     agent: &rig::agent::Agent<M>,
     input: &str,
     history: &Arc<[Message]>,
+    context: ContextInput,
     tx: AgentEventSender,
     mut cancel_rx: watch::Receiver<bool>,
     max_multi_turn: u32,
-) -> Result<Vec<Message>, TurnFailure> {
+) -> Result<ChatOutcome, TurnFailure> {
     let mut attempt = 1;
+    let mut overflow_retried = false;
+    let active = context.policy.map(|policy| ActiveContext {
+        policy,
+        runtime: Arc::new(Mutex::new(ContextRuntime {
+            checkpoint: context.checkpoint.clone(),
+            ..Default::default()
+        })),
+    });
     loop {
-        match stream_once(agent, input, history, &tx, &mut cancel_rx, max_multi_turn).await {
-            Ok(updated) => return Ok(updated),
+        match stream_once(
+            agent,
+            input,
+            history,
+            &active,
+            &tx,
+            &mut cancel_rx,
+            max_multi_turn,
+        )
+        .await
+        {
+            Ok(updated) => {
+                return Ok(ChatOutcome {
+                    history: updated,
+                    context: current_checkpoint(&active, &context.checkpoint).await,
+                });
+            }
             Err(failure) => {
+                // 上下文溢出恢复：尚未执行 ToolCall 时强制压缩并最多重试一次。
+                // 已执行 ToolCall 则不自动重试（副作用可能已发生），保守失败。
+                if !failure.saw_tool_call
+                    && !overflow_retried
+                    && let Some(active_ctx) = &active
+                    && is_context_overflow(&failure.source)
+                {
+                    overflow_retried = true;
+                    let mut rt = active_ctx.runtime.lock().await;
+                    rt.force_compaction = true;
+                    rt.overflow_error = Some(failure.source.to_string());
+                    let _ = tx.send(AgentEvent::Notice(crate::t!("context-overflow-retry")));
+                    continue;
+                }
+                let mut failure = failure;
+                failure.context = current_checkpoint(&active, &context.checkpoint).await;
                 let RetryDecision::Retry { delay } =
                     retry_decision(&failure.source, failure.saw_tool_call, attempt)
                 else {
@@ -401,7 +507,10 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                 tokio::select! {
                     biased;
                     _ = cancel_rx.changed() => {
-                        return Ok(cancel_return(&tx, input, history, PartialTurn::default()));
+                        return Ok(ChatOutcome {
+                            history: cancel_return(&tx, input, history, PartialTurn::default()),
+                            context: current_checkpoint(&active, &context.checkpoint).await,
+                        });
                     }
                     _ = tokio::time::sleep(delay) => {}
                 }
@@ -423,6 +532,8 @@ fn stall_failure(
             secs: waited.as_secs(),
         },
         history: partial.finish(input, history),
+        // 占位，由 stream_chat 统一填充运行期 checkpoint。
+        context: ContextCheckpoint::default(),
         saw_tool_call,
     }
 }
@@ -431,6 +542,7 @@ async fn stream_once<M: CompletionModel + 'static>(
     agent: &rig::agent::Agent<M>,
     input: &str,
     history: &[Message],
+    active_ctx: &Option<ActiveContext>,
     tx: &AgentEventSender,
     cancel_rx: &mut watch::Receiver<bool>,
     max_multi_turn: u32,
@@ -442,6 +554,16 @@ async fn stream_once<M: CompletionModel + 'static>(
         .stream_prompt(input)
         .history(history.to_vec())
         .max_turns(max_multi_turn as usize);
+    // 上下文管理启用时挂载 hook：每次 completion 前检查预算并按需压缩。
+    let stream_request = match active_ctx {
+        Some(active) => stream_request.add_hook(ContextHook {
+            model: Arc::clone(&agent.model),
+            policy: active.policy,
+            runtime: Arc::clone(&active.runtime),
+            tx: tx.clone(),
+        }),
+        None => stream_request,
+    };
     let mut stream = tokio::select! {
         biased;
         _ = cancel_rx.changed() => return Ok(cancel_return(tx, input, history, partial)),
@@ -527,8 +649,25 @@ async fn stream_once<M: CompletionModel + 'static>(
                 });
             }
             Some(Ok(MultiTurnStreamItem::FinalResponse(final_response))) => {
-                if let Some(updated) = final_response.messages() {
-                    final_history = Some(updated.to_vec());
+                if let Some(new_messages) = final_response.messages() {
+                    // rig 0.40 的 messages 只含本轮新增（prompt + 各轮消息），
+                    // 不含输入历史——必须拼回完整 transcript。
+                    let mut full = history.to_vec();
+                    full.extend_from_slice(new_messages);
+                    final_history = Some(full);
+                }
+            }
+            // 每个 completion 的实际 usage：供同一提交内的后续工具轮次
+            // 用最新样本做预算投影（全零视为 provider 未上报，保留估算兜底）。
+            Some(Ok(MultiTurnStreamItem::CompletionCall(call))) => {
+                if let Some(active) = active_ctx
+                    && let Some(input_tokens) = crate::context::effective_input_tokens(&call.usage)
+                {
+                    let mut rt = active.runtime.lock().await;
+                    rt.usage = Some(UsageSample {
+                        input_tokens,
+                        estimated_request_tokens: rt.last_request_estimate,
+                    });
                 }
             }
             Some(Ok(_)) => {}
@@ -541,6 +680,8 @@ async fn stream_once<M: CompletionModel + 'static>(
                 return Err(TurnFailure {
                     history,
                     saw_tool_call,
+                    // 占位，由 stream_chat 统一填充运行期 checkpoint。
+                    context: ContextCheckpoint::default(),
                     source: AgentError::Stream { source: err },
                 });
             }
@@ -548,6 +689,124 @@ async fn stream_once<M: CompletionModel + 'static>(
         }
     }
     Ok(final_history.unwrap_or_else(|| partial.finish(input, history)))
+}
+
+/// 每次 completion 前检查上下文预算并按需滚动压缩的 request hook。
+///
+/// 只挂到主请求；摘要请求直接用 `CompletionModel::completion_request`，
+/// 不经过 agent 循环，避免递归压缩。
+struct ContextHook<M: CompletionModel> {
+    model: Arc<M>,
+    policy: ContextPolicy,
+    runtime: Arc<Mutex<ContextRuntime>>,
+    tx: AgentEventSender,
+}
+
+/// 调用当前模型生成滚动摘要：独立 preamble、空 history、无工具、
+/// 最大输出 `min(8192, reserve_tokens / 2)`。
+async fn summarize<M: CompletionModel>(
+    model: &M,
+    policy: &ContextPolicy,
+    input: String,
+) -> Result<String, crate::context::SummaryError> {
+    let response = model
+        .completion_request(Message::user(input))
+        .preamble(crate::context::SUMMARY_PREAMBLE.to_string())
+        .max_tokens(policy.summary_max_tokens())
+        .send()
+        .await?;
+    let text = response
+        .choice
+        .iter()
+        .filter_map(|c| match c {
+            AssistantContent::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .join("\n");
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        Err(crate::context::SummaryError::Empty)
+    } else {
+        Ok(text)
+    }
+}
+
+impl<M: CompletionModel> AgentHook<M> for ContextHook<M> {
+    async fn on_event(&self, _ctx: &HookContext, event: StepEvent<'_, M>) -> Flow {
+        let StepEvent::CompletionCall {
+            prompt, history, ..
+        } = event
+        else {
+            return Flow::cont();
+        };
+        let mut rt = self.runtime.lock().await;
+        let checkpoint = rt.checkpoint.clone();
+        let active = crate::context::build_active_history(&checkpoint, history);
+        let estimate =
+            crate::context::estimate_history(&active) + crate::context::estimate_message(prompt);
+        rt.last_request_estimate = estimate;
+        match crate::context::decide(
+            &self.policy,
+            &checkpoint,
+            rt.usage,
+            rt.force_compaction,
+            history,
+            prompt,
+            estimate,
+        ) {
+            Decision::None => Flow::cont(),
+            Decision::PatchActive => Flow::patch_request(RequestPatch::new().history(active)),
+            Decision::Terminate => {
+                // 强制压缩仍无合法切点：返回原始 provider 错误及上下文说明。
+                // （force_compaction 只与 overflow_error 一起设置，None 分支不可达。）
+                let error = rt.overflow_error.take().unwrap_or_default();
+                Flow::terminate(crate::t!("context-compact-impossible", error = error))
+            }
+            Decision::Compact(k) => {
+                // force 标志一次性消费：无论本次摘要成败。
+                rt.force_compaction = false;
+                rt.overflow_error = None;
+                let covered = checkpoint.covered_messages;
+                let input = crate::context::build_summary_prompt(
+                    checkpoint.summary.as_deref(),
+                    &history[covered..k],
+                );
+                match summarize(self.model.as_ref(), &self.policy, input).await {
+                    Ok(summary) => {
+                        // 摘要成功后原子更新 summary 与 covered_messages。
+                        rt.checkpoint = ContextCheckpoint {
+                            summary: Some(summary),
+                            covered_messages: k,
+                        };
+                        let active = crate::context::build_active_history(&rt.checkpoint, history);
+                        rt.last_request_estimate = crate::context::estimate_history(&active)
+                            + crate::context::estimate_message(prompt);
+                        let _ = self.tx.send(AgentEvent::Notice(crate::t!(
+                            "context-compacted",
+                            count = k - covered
+                        )));
+                        Flow::patch_request(RequestPatch::new().history(active))
+                    }
+                    Err(err) => {
+                        // 摘要失败：checkpoint 不推进，按原活动历史发送；
+                        // 若 provider 随后溢出，由 overflow 恢复路径处理。
+                        let _ = self.tx.send(AgentEvent::Notice(crate::t!(
+                            "context-compact-failed",
+                            error = err.to_string()
+                        )));
+                        Flow::patch_request(RequestPatch::new().history(active))
+                    }
+                }
+            }
+        }
+    }
+
+    fn observes(&self, kind: StepEventKind) -> bool {
+        !matches!(
+            kind,
+            StepEventKind::TextDelta | StepEventKind::ToolCallDelta
+        )
+    }
 }
 
 pub struct DynamicAgent {
@@ -560,12 +819,14 @@ impl DynamicAgent {
         &self,
         input: &str,
         history: Arc<[Message]>,
+        context: ContextInput,
         tx: AgentEventSender,
         cancel_rx: watch::Receiver<bool>,
-    ) -> Result<Vec<Message>, TurnFailure> {
+    ) -> Result<ChatOutcome, TurnFailure> {
         (self.chat)(
             input.to_string(),
             history,
+            context,
             tx,
             cancel_rx,
             self.max_multi_turn,
@@ -640,13 +901,19 @@ macro_rules! providers {
                             );
                             return Ok(DynamicAgent {
                                 chat: Box::new(
-                                    move |input, history: Arc<[Message]>, tx, cancel_rx, max_multi_turn| {
+                                    move |input,
+                                          history: Arc<[Message]>,
+                                          context: ContextInput,
+                                          tx,
+                                          cancel_rx,
+                                          max_multi_turn| {
                                         let agent = Arc::clone(&inner);
                                         Box::pin(async move {
                                             crate::agent::stream_chat(
                                                 &agent,
                                                 &input,
                                                 &history,
+                                                context,
                                                 tx,
                                                 cancel_rx,
                                                 max_multi_turn,
@@ -1061,5 +1328,461 @@ mod tests {
             err_msg.contains("unknown-model"),
             "unexpected error: {err_msg}"
         );
+    }
+
+    // ── 上下文窗口管理 ──────────────────────────────────────────────
+
+    use crate::context::ContextPolicy;
+    use rig::completion::{CompletionRequest, CompletionResponse, Usage};
+    use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+    use rig::test_utils::{MockAddTool, MockResponse};
+    use std::collections::VecDeque;
+    use std::sync::Mutex as StdMutex;
+
+    fn overflow_err(text: &str) -> AgentError {
+        AgentError::Stream {
+            source: rig::agent::StreamingError::Completion(
+                rig::completion::CompletionError::ProviderError(text.into()),
+            ),
+        }
+    }
+
+    #[test]
+    fn overflow_classification_matches_common_patterns() {
+        for text in [
+            "error code: context_length_exceeded",
+            "This model's maximum context length is 8192 tokens",
+            "the context window is full",
+            "prompt too long: 200000 tokens",
+            "request has too many tokens",
+        ] {
+            assert!(is_context_overflow(&overflow_err(text)), "{text}");
+        }
+        assert!(!is_context_overflow(&overflow_err("rate limit exceeded")));
+        assert!(!is_context_overflow(&AgentError::Stalled { secs: 1 }));
+        assert!(!is_context_overflow(&stream_err(
+            http::StatusCode::BAD_REQUEST
+        )));
+    }
+
+    /// 脚本化模型：流式主循环与非流式摘要请求各自排队，并记录全部请求。
+    /// （rig 的 MockCompletionModel 只支持单一队列，无法同时脚本化两种调用。）
+    #[derive(Clone, Default)]
+    struct ScriptedModel {
+        state: Arc<ScriptedState>,
+    }
+
+    #[derive(Default)]
+    struct ScriptedState {
+        completions: StdMutex<VecDeque<Result<String, String>>>,
+        streams: StdMutex<VecDeque<Vec<ScriptedStreamItem>>>,
+        requests: StdMutex<Vec<CompletionRequest>>,
+    }
+
+    enum ScriptedStreamItem {
+        Text(String),
+        ToolCall {
+            id: String,
+            name: String,
+            args: serde_json::Value,
+        },
+        Final(Usage),
+        Error(String),
+    }
+
+    impl ScriptedModel {
+        fn with_streams(self, streams: Vec<Vec<ScriptedStreamItem>>) -> Self {
+            *self.state.streams.lock().unwrap() = streams.into();
+            self
+        }
+
+        fn with_completions(self, completions: Vec<Result<String, String>>) -> Self {
+            *self.state.completions.lock().unwrap() = completions.into();
+            self
+        }
+
+        fn requests(&self) -> Vec<CompletionRequest> {
+            self.state.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl CompletionModel for ScriptedModel {
+        type Response = MockResponse;
+        type StreamingResponse = MockResponse;
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self::default()
+        }
+
+        async fn completion(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse<MockResponse>, rig::completion::CompletionError> {
+            use rig::completion::CompletionError;
+            self.state.requests.lock().unwrap().push(request);
+            let next = self
+                .state
+                .completions
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| CompletionError::ProviderError("no scripted completion".into()))?;
+            let text = next.map_err(CompletionError::ProviderError)?;
+            Ok(CompletionResponse {
+                choice: OneOrMany::one(AssistantContent::text(text)),
+                usage: Usage::new(),
+                raw_response: MockResponse::new(),
+                message_id: None,
+            })
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<MockResponse>, rig::completion::CompletionError>
+        {
+            use rig::completion::CompletionError;
+            self.state.requests.lock().unwrap().push(request);
+            let items = self
+                .state
+                .streams
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| CompletionError::ProviderError("no scripted stream".into()))?;
+            let choices: Vec<Result<RawStreamingChoice<MockResponse>, CompletionError>> = items
+                .into_iter()
+                .map(|item| match item {
+                    ScriptedStreamItem::Text(t) => Ok(RawStreamingChoice::Message(t)),
+                    ScriptedStreamItem::ToolCall { id, name, args } => {
+                        Ok(RawStreamingChoice::ToolCall(
+                            rig::streaming::RawStreamingToolCall::new(id, name, args),
+                        ))
+                    }
+                    ScriptedStreamItem::Final(u) => Ok(RawStreamingChoice::FinalResponse(
+                        MockResponse::with_usage(u),
+                    )),
+                    ScriptedStreamItem::Error(e) => Err(CompletionError::ProviderError(e)),
+                })
+                .collect();
+            Ok(StreamingCompletionResponse::stream(Box::pin(
+                futures::stream::iter(choices),
+            )))
+        }
+    }
+
+    fn usage(input: u64, output: u64) -> Usage {
+        Usage {
+            input_tokens: input,
+            output_tokens: output,
+            total_tokens: input + output,
+            cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
+        }
+    }
+
+    fn long_history() -> Vec<Message> {
+        vec![
+            Message::user("u".repeat(100)),
+            Message::assistant("a".repeat(100)),
+            Message::user("u".repeat(100)),
+            Message::assistant("a".repeat(100)),
+        ]
+    }
+
+    fn test_policy() -> ContextPolicy {
+        ContextPolicy {
+            window_tokens: 10_000,
+            reserve_tokens: 256,
+            keep_recent_tokens: 60,
+        }
+    }
+
+    fn ctx_input(policy: ContextPolicy) -> ContextInput {
+        ContextInput {
+            policy: Some(policy),
+            checkpoint: ContextCheckpoint::default(),
+        }
+    }
+
+    /// 测试通道：返回的 cancel_tx 必须持有到 stream_chat 结束，
+    /// 否则 sender 掉线会让 changed() 立即返回（误判为取消）。
+    fn channels() -> (AgentEventSender, watch::Sender<bool>, watch::Receiver<bool>) {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        (tx, cancel_tx, cancel_rx)
+    }
+
+    /// 请求中是否包含指定文本的消息。
+    fn request_contains(req: &CompletionRequest, text: &str) -> bool {
+        req.chat_history.iter().any(|m| match m {
+            Message::System { content } => content.contains(text),
+            Message::User { content } => content.iter().any(|c| match c {
+                UserContent::Text(t) => t.text.contains(text),
+                UserContent::ToolResult(r) => r.content.iter().any(|rc| match rc {
+                    ToolResultContent::Text(t) => t.text.contains(text),
+                    _ => false,
+                }),
+                _ => false,
+            }),
+            Message::Assistant { content, .. } => content.iter().any(|c| match c {
+                AssistantContent::Text(t) => t.text.contains(text),
+                _ => false,
+            }),
+        })
+    }
+
+    /// turn 1 的 usage 必须流入 turn 2 的预算投影：同一提交内的连续
+    /// CompletionCall 依次更新样本，投影超限 → turn 2 前滚动压缩，
+    /// provider 收到“摘要 + 最近原文”，完整 transcript 不变。
+    #[tokio::test]
+    async fn usage_from_completion_call_drives_later_turn_compaction() {
+        let model = ScriptedModel::default()
+            .with_streams(vec![
+                vec![
+                    ScriptedStreamItem::ToolCall {
+                        id: "tc1".into(),
+                        name: "add".into(),
+                        args: serde_json::json!({"x": 1, "y": 2}),
+                    },
+                    // turn 1 上报巨大输入 → turn 2 投影超限
+                    ScriptedStreamItem::Final(usage(9_950, 10)),
+                ],
+                vec![
+                    ScriptedStreamItem::Text("done".into()),
+                    ScriptedStreamItem::Final(usage(100, 10)),
+                ],
+            ])
+            .with_completions(vec![Ok("## Goal\n测试摘要".into())]);
+        let agent = rig::agent::AgentBuilder::new(model.clone())
+            .preamble("test")
+            .tool(MockAddTool)
+            .build();
+        let (tx, _cancel_tx, cancel_rx) = channels();
+        let history: Arc<[Message]> = Arc::from(long_history());
+        let outcome = stream_chat(
+            &agent,
+            "go",
+            &history,
+            ctx_input(test_policy()),
+            tx,
+            cancel_rx,
+            5,
+        )
+        .await
+        .expect("turn should succeed");
+        // checkpoint 推进，摘要内容来自脚本
+        assert!(outcome.context.covered_messages > 0);
+        assert_eq!(
+            outcome.context.summary.as_deref(),
+            Some("## Goal\n测试摘要")
+        );
+        // 完整 transcript：4 条输入 + go + call + result + done
+        assert_eq!(outcome.history.len(), 4 + 4);
+        let reqs = model.requests();
+        assert_eq!(reqs.len(), 3, "stream1 + summary + stream2");
+        // 摘要请求包含新淘汰历史
+        assert!(request_contains(&reqs[1], "<new-history>"));
+        // turn 2 请求：摘要 system 消息在内，已覆盖的原文不在
+        assert!(request_contains(&reqs[2], "测试摘要"));
+        assert!(!request_contains(&reqs[2], &"u".repeat(100)));
+        // turn 1 请求仍是原始完整历史
+        assert!(request_contains(&reqs[0], &"u".repeat(100)));
+    }
+
+    /// 初始 completion overflow → 强制压缩并重试一次 → 成功。
+    #[tokio::test]
+    async fn overflow_forces_compaction_and_retries_once() {
+        let model = ScriptedModel::default()
+            .with_streams(vec![
+                vec![ScriptedStreamItem::Error(
+                    "maximum context length exceeded".into(),
+                )],
+                vec![
+                    ScriptedStreamItem::Text("ok".into()),
+                    ScriptedStreamItem::Final(usage(50, 10)),
+                ],
+            ])
+            .with_completions(vec![Ok("压缩后的摘要".into())]);
+        let agent = rig::agent::AgentBuilder::new(model.clone())
+            .preamble("test")
+            .build();
+        let (tx, _cancel_tx, cancel_rx) = channels();
+        let history: Arc<[Message]> = Arc::from(long_history());
+        let outcome = stream_chat(
+            &agent,
+            "go",
+            &history,
+            ctx_input(test_policy()),
+            tx,
+            cancel_rx,
+            5,
+        )
+        .await
+        .expect("overflow retry should succeed");
+        assert!(outcome.context.covered_messages > 0);
+        assert_eq!(outcome.context.summary.as_deref(), Some("压缩后的摘要"));
+        let reqs = model.requests();
+        assert_eq!(reqs.len(), 3, "failed stream + summary + retried stream");
+        // 重试请求带摘要、不含已覆盖原文
+        assert!(request_contains(&reqs[2], "压缩后的摘要"));
+    }
+
+    /// 已执行 ToolCall 后 overflow：不自动重试，保守失败。
+    #[tokio::test]
+    async fn no_overflow_retry_after_tool_call() {
+        let model = ScriptedModel::default().with_streams(vec![
+            vec![
+                ScriptedStreamItem::ToolCall {
+                    id: "tc1".into(),
+                    name: "add".into(),
+                    args: serde_json::json!({"x": 1, "y": 2}),
+                },
+                ScriptedStreamItem::Final(usage(100, 10)),
+            ],
+            vec![ScriptedStreamItem::Error(
+                "context window exceeded: too many tokens".into(),
+            )],
+        ]);
+        let agent = rig::agent::AgentBuilder::new(model.clone())
+            .preamble("test")
+            .tool(MockAddTool)
+            .build();
+        let (tx, _cancel_tx, cancel_rx) = channels();
+        let history: Arc<[Message]> = Arc::from(long_history());
+        let result = stream_chat(
+            &agent,
+            "go",
+            &history,
+            ctx_input(test_policy()),
+            tx,
+            cancel_rx,
+            5,
+        )
+        .await;
+        let failure = match result {
+            Err(f) => f,
+            Ok(_) => panic!("expected failure"),
+        };
+        assert!(is_context_overflow(&failure.source));
+        // 无摘要请求、无重试
+        assert_eq!(model.requests().len(), 2);
+        // 部分历史保留：输入 4 + go + call + result
+        assert_eq!(failure.history.len(), 4 + 3);
+    }
+
+    /// 重试后第二次仍 overflow：停止，不循环压缩。
+    #[tokio::test]
+    async fn second_overflow_stops_without_looping() {
+        let model = ScriptedModel::default()
+            .with_streams(vec![
+                vec![ScriptedStreamItem::Error("prompt too long".into())],
+                vec![ScriptedStreamItem::Error("prompt too long".into())],
+            ])
+            .with_completions(vec![Ok("部分摘要".into())]);
+        let agent = rig::agent::AgentBuilder::new(model.clone())
+            .preamble("test")
+            .build();
+        let (tx, _cancel_tx, cancel_rx) = channels();
+        let history: Arc<[Message]> = Arc::from(long_history());
+        let result = stream_chat(
+            &agent,
+            "go",
+            &history,
+            ctx_input(test_policy()),
+            tx,
+            cancel_rx,
+            5,
+        )
+        .await;
+        let failure = match result {
+            Err(f) => f,
+            Ok(_) => panic!("expected failure"),
+        };
+        assert!(is_context_overflow(&failure.source));
+        // 压缩重试只有一次：failed + summary + failed，无第二个摘要请求
+        assert_eq!(model.requests().len(), 3);
+        // 失败仍携带压缩后的 checkpoint
+        assert!(failure.context.covered_messages > 0);
+        assert_eq!(failure.context.summary.as_deref(), Some("部分摘要"));
+    }
+
+    /// 强制压缩时仍无合法切点：终止并带回原始 provider 错误说明。
+    #[tokio::test]
+    async fn forced_compaction_without_legal_cut_returns_original_error() {
+        let model = ScriptedModel::default().with_streams(vec![
+            vec![ScriptedStreamItem::Error("context_length_exceeded".into())],
+            vec![ScriptedStreamItem::Error("context_length_exceeded".into())],
+        ]);
+        let agent = rig::agent::AgentBuilder::new(model.clone())
+            .preamble("test")
+            .build();
+        // 窗口小到连 prompt 本身都装不下 → 任何切点都非法
+        let policy = ContextPolicy {
+            window_tokens: 200,
+            reserve_tokens: 64,
+            keep_recent_tokens: 60,
+        };
+        let (tx, _cancel_tx, cancel_rx) = channels();
+        let history: Arc<[Message]> = Arc::from(long_history());
+        let result = stream_chat(
+            &agent,
+            &"x".repeat(500),
+            &history,
+            ctx_input(policy),
+            tx,
+            cancel_rx,
+            5,
+        )
+        .await;
+        let failure = match result {
+            Err(f) => f,
+            Ok(_) => panic!("expected failure"),
+        };
+        // 终止原因带原始 provider 错误；hook 在重试发请求前终止，无摘要请求
+        assert!(
+            failure
+                .source
+                .to_string()
+                .contains("context_length_exceeded")
+        );
+        assert_eq!(model.requests().len(), 1);
+        // 完整历史不丢（含本轮 prompt，canonical_history 语义）
+        assert_eq!(failure.history.len(), 5);
+    }
+
+    /// 摘要失败：checkpoint 不推进，按原活动历史发送（本轮后续 overflow
+    /// 由恢复路径处理）。
+    #[tokio::test]
+    async fn summary_failure_does_not_advance_checkpoint() {
+        let model = ScriptedModel::default()
+            .with_streams(vec![vec![
+                ScriptedStreamItem::Text("done".into()),
+                ScriptedStreamItem::Final(usage(100, 10)),
+            ]])
+            // 摘要请求直接失败
+            .with_completions(vec![Err("summary boom".into())]);
+        let agent = rig::agent::AgentBuilder::new(model.clone())
+            .preamble("test")
+            .build();
+        // 极小窗口，保证触发压缩
+        let policy = ContextPolicy {
+            window_tokens: 200,
+            reserve_tokens: 64,
+            keep_recent_tokens: 60,
+        };
+        let (tx, _cancel_tx, cancel_rx) = channels();
+        let history: Arc<[Message]> = Arc::from(long_history());
+        let outcome = stream_chat(&agent, "go", &history, ctx_input(policy), tx, cancel_rx, 5)
+            .await
+            .expect("summary failure should not fail the turn");
+        assert!(outcome.context.is_empty(), "checkpoint must not advance");
+        let reqs = model.requests();
+        assert_eq!(reqs.len(), 2, "summary + main stream");
+        // 主请求按原活动历史发送（含全部原文）
+        assert!(request_contains(&reqs[1], &"u".repeat(100)));
     }
 }

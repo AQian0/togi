@@ -35,6 +35,14 @@ pub(crate) const DEFAULT_PREAMBLE: &str = "\
 不要臆造或手动填写隐藏参数；相对路径直接按当前工作目录解析。\
 工具输出按行分页，需要查看更多内容时用工具的 offset / limit 参数翻页。";
 
+// ── 上下文窗口管理 ──────────────────────────────────────────────────
+
+/// `[context] reserve_tokens` 默认值。
+pub(crate) const DEFAULT_RESERVE_TOKENS: u64 = 16_384;
+
+/// `[context] keep_recent_tokens` 默认值。
+pub(crate) const DEFAULT_KEEP_RECENT_TOKENS: u64 = 20_000;
+
 // ── 时间间隔 ──────────────────────────────────────────────────────
 
 /// 双击 Ctrl-C 退出窗口期。

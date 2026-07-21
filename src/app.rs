@@ -1,5 +1,6 @@
 use crate::agent::DynamicAgent;
 use crate::cli::command::Args;
+use crate::context::{ContextCheckpoint, ContextInput, ContextPolicy};
 use crate::pipeline::inject::{CWD_PARAM, inject};
 use crate::pipeline::paginate::paginate;
 use crate::shared::constants;
@@ -31,6 +32,8 @@ struct AppController {
     history: History,
     store: Option<Arc<HistoryStore>>,
     session_id: SessionId,
+    context: Arc<RwLock<ContextCheckpoint>>,
+    context_policy: Option<ContextPolicy>,
     registry: Arc<ToolRegistry>,
     cancel_tx: watch::Sender<bool>,
     task_cancel: CancellationToken,
@@ -38,11 +41,14 @@ struct AppController {
 }
 
 impl AppController {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         agent: Arc<DynamicAgent>,
         history: History,
         store: Option<Arc<HistoryStore>>,
         session_id: SessionId,
+        context: Arc<RwLock<ContextCheckpoint>>,
+        context_policy: Option<ContextPolicy>,
         registry: Arc<ToolRegistry>,
         cancel_tx: watch::Sender<bool>,
         task_cancel: CancellationToken,
@@ -52,6 +58,8 @@ impl AppController {
             history,
             store,
             session_id,
+            context,
+            context_policy,
             registry,
             cancel_tx,
             task_cancel,
@@ -79,15 +87,28 @@ impl AppController {
         });
     }
 
-    /// 将当前历史落盘；存储不可用或保存失败时仅提示，不影响对话。
+    /// 将当前历史与上下文 checkpoint 落盘（先消息后 checkpoint）；
+    /// 存储不可用或保存失败时仅提示，不影响对话。
     async fn persist_history(&self, session_id: &str, tx: &UiSender) {
         let Some(store) = &self.store else {
             return;
         };
-        let hist = self.history.read().await;
-        if let Err(err) = store.save(session_id, &hist).await {
+        {
+            let hist = self.history.read().await;
+            if let Err(err) = store.save(session_id, &hist).await {
+                let _ = tx.send(OutputItem::Notice(crate::t!(
+                    "store-save-error",
+                    error = err.user_message()
+                )));
+            }
+        }
+        let checkpoint = self.context.read().await.clone();
+        if checkpoint.is_empty() {
+            return;
+        }
+        if let Err(err) = store.save_context(session_id, &checkpoint).await {
             let _ = tx.send(OutputItem::Notice(crate::t!(
-                "store-save-error",
+                "context-save-error",
                 error = err.user_message()
             )));
         }
@@ -103,6 +124,7 @@ impl AppController {
                 &self.history,
                 self.store.as_ref(),
                 &self.session_id,
+                &self.context,
             )
             .await;
             if handled {
@@ -145,19 +167,24 @@ impl AppController {
                 let _ = tx.send(OutputItem::Done);
                 return;
             }
-            r = self.agent.stream_chat(&message, hist, agent_tx, cancel_rx) => r,
+            r = self.agent.stream_chat(&message, hist, ContextInput {
+                policy: self.context_policy,
+                checkpoint: self.context.read().await.clone(),
+            }, agent_tx, cancel_rx) => r,
         };
         let _ = forward_task.await;
 
         match result {
-            Ok(updated_history) => {
-                *self.history.write().await = Arc::from(updated_history);
+            Ok(outcome) => {
+                *self.history.write().await = Arc::from(outcome.history);
+                *self.context.write().await = outcome.context;
                 self.persist_history(&session_id, &tx).await;
                 let _ = tx.send(OutputItem::Done);
             }
             Err(failure) => {
                 // 失败同样保留并落盘部分历史：已完成的工具往返对后续对话有效。
                 *self.history.write().await = Arc::from(failure.history);
+                *self.context.write().await = failure.context;
                 self.persist_history(&session_id, &tx).await;
                 let _ = tx.send(OutputItem::Error(ErrorInfo::from_error(&failure.source)));
                 let _ = tx.send(OutputItem::Done);
@@ -242,17 +269,24 @@ fn build_agent(
     }
 }
 
-/// 初始化持久化存储并恢复上次会话的历史记录。
+/// 初始化持久化存储并恢复上次会话的历史记录与上下文 checkpoint。
 ///
 /// 数据库不可用时静默降级为纯内存模式，不影响正常对话功能。
-async fn init_history() -> (History, Option<Arc<HistoryStore>>, SessionId) {
+async fn init_history() -> (
+    History,
+    Option<Arc<HistoryStore>>,
+    SessionId,
+    Arc<RwLock<ContextCheckpoint>>,
+) {
     let session_id: SessionId =
         Arc::new(RwLock::new(Arc::from(crate::store::default_session_id())));
+    let empty_context = || Arc::new(RwLock::new(ContextCheckpoint::default()));
     let Some(db_path) = crate::store::default_db_path() else {
         return (
             Arc::new(RwLock::new(Arc::from(Vec::new()))),
             None,
             session_id,
+            empty_context(),
         );
     };
     match HistoryStore::open(&db_path).await {
@@ -266,8 +300,20 @@ async fn init_history() -> (History, Option<Arc<HistoryStore>>, SessionId) {
                 );
                 Vec::new()
             });
+            let checkpoint = store.load_context(&sid).await.unwrap_or_else(|err| {
+                eprintln!(
+                    "{}",
+                    crate::t!("context-load-error", error = err.user_message())
+                );
+                ContextCheckpoint::default()
+            });
             let history = Arc::new(RwLock::new(Arc::from(messages)));
-            (history, Some(store), session_id)
+            (
+                history,
+                Some(store),
+                session_id,
+                Arc::new(RwLock::new(checkpoint)),
+            )
         }
         Err(err) => {
             eprintln!(
@@ -282,6 +328,7 @@ async fn init_history() -> (History, Option<Arc<HistoryStore>>, SessionId) {
                 Arc::new(RwLock::new(Arc::from(Vec::new()))),
                 None,
                 session_id,
+                empty_context(),
             )
         }
     }
@@ -290,6 +337,7 @@ async fn init_history() -> (History, Option<Arc<HistoryStore>>, SessionId) {
 pub async fn run() -> crate::shared::error::Result<()> {
     let args = Args::parse();
     let config = crate::config::Config::load()?;
+    let context_policy = config.effective_context_policy()?;
     apply_theme(&args, &config)?;
     preload_highlighting().await;
 
@@ -299,7 +347,7 @@ pub async fn run() -> crate::shared::error::Result<()> {
     })?;
     let (tools, registry) = build_tools(&cwd);
     let agent = Arc::new(build_agent(&args, &config, tools)?);
-    let (history, store, session_id) = init_history().await;
+    let (history, store, session_id, context) = init_history().await;
     let mut session = Session::new()?;
 
     let global_cancel = CancellationToken::new();
@@ -308,6 +356,8 @@ pub async fn run() -> crate::shared::error::Result<()> {
         history,
         store,
         session_id,
+        context,
+        context_policy,
         Arc::new(registry),
         session.cancel_sender(),
         global_cancel.clone(),

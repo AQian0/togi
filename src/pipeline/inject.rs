@@ -115,8 +115,10 @@ mod tests {
 
     #[tokio::test]
     async fn inject_adds_hidden_params_to_tool_calls() {
-        let tools: Vec<Box<dyn ToolDyn>> =
-            inject(test_params(), vec![Box::new(Echo) as Box<dyn ToolDyn>, Box::new(Echo)]);
+        let tools: Vec<Box<dyn ToolDyn>> = inject(
+            test_params(),
+            vec![Box::new(Echo) as Box<dyn ToolDyn>, Box::new(Echo)],
+        );
         assert_eq!(tools.len(), 2);
         for tool in tools {
             let output = tool.call("null".to_string()).await.unwrap();
@@ -131,8 +133,7 @@ mod tests {
 
     #[tokio::test]
     async fn injected_values_override_model_arguments() {
-        let tool: Box<dyn ToolDyn> =
-            inject(test_params(), vec![Box::new(Echo)]).pop().unwrap();
+        let tool: Box<dyn ToolDyn> = inject(test_params(), vec![Box::new(Echo)]).pop().unwrap();
         let output = tool
             .call(
                 json!({
@@ -151,8 +152,7 @@ mod tests {
 
     #[tokio::test]
     async fn definition_hides_all_injected_params() {
-        let tool: Box<dyn ToolDyn> =
-            inject(test_params(), vec![Box::new(Echo)]).pop().unwrap();
+        let tool: Box<dyn ToolDyn> = inject(test_params(), vec![Box::new(Echo)]).pop().unwrap();
         let definition = rig::tool::tool_definition(&*tool);
         let properties = definition.parameters["properties"].as_object().unwrap();
         let required = definition.parameters["required"].as_array().unwrap();

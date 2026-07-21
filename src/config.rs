@@ -17,6 +17,8 @@ pub enum ConfigError {
         #[source]
         source: toml::de::Error,
     },
+    #[error("invalid context configuration: {0}")]
+    InvalidContext(String),
 }
 
 impl TogiError for ConfigError {
@@ -24,13 +26,14 @@ impl TogiError for ConfigError {
         match self {
             Self::Read { .. } => "config.read",
             Self::Parse { .. } => "config.parse",
+            Self::InvalidContext(_) => "config.invalid_context",
         }
     }
 
     fn kind(&self) -> ErrorKind {
         match self {
             Self::Read { .. } => ErrorKind::Io,
-            Self::Parse { .. } => ErrorKind::InvalidArgument,
+            Self::Parse { .. } | Self::InvalidContext(_) => ErrorKind::InvalidArgument,
         }
     }
 
@@ -46,6 +49,7 @@ impl TogiError for ConfigError {
                 path = path.display().to_string(),
                 error = source.to_string()
             ),
+            Self::InvalidContext(message) => message.clone(),
         }
     }
 }
@@ -61,12 +65,23 @@ pub struct SystemConfig {
     pub max_multi_turn: Option<u32>,
 }
 
+/// 上下文窗口管理配置。`window_tokens` 未配置时关闭自动上下文管理。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContextConfig {
+    pub window_tokens: Option<u64>,
+    pub reserve_tokens: Option<u64>,
+    pub keep_recent_tokens: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub system: SystemConfig,
+    #[serde(default)]
+    pub context: ContextConfig,
 }
 
 impl Config {
@@ -83,6 +98,43 @@ impl Config {
         self.system
             .max_multi_turn
             .unwrap_or(constants::MAX_MULTI_TURN_ITERATIONS)
+    }
+
+    /// 获取上下文窗口策略：未配置 `window_tokens` 时返回 `Ok(None)`（关闭）。
+    /// 非法值返回配置错误，不在运行时静默修正。
+    pub fn effective_context_policy(
+        &self,
+    ) -> Result<Option<crate::context::ContextPolicy>, ConfigError> {
+        let Some(window) = self.context.window_tokens else {
+            return Ok(None);
+        };
+        let reserve = self
+            .context
+            .reserve_tokens
+            .unwrap_or(constants::DEFAULT_RESERVE_TOKENS);
+        let keep = self
+            .context
+            .keep_recent_tokens
+            .unwrap_or(constants::DEFAULT_KEEP_RECENT_TOKENS);
+        if reserve >= window {
+            return Err(ConfigError::InvalidContext(crate::t!(
+                "config-context-reserve-too-big",
+                reserve = reserve,
+                window = window
+            )));
+        }
+        if keep >= window - reserve {
+            return Err(ConfigError::InvalidContext(crate::t!(
+                "config-context-keep-too-big",
+                keep = keep,
+                available = window - reserve
+            )));
+        }
+        Ok(Some(crate::context::ContextPolicy {
+            window_tokens: window,
+            reserve_tokens: reserve,
+            keep_recent_tokens: keep,
+        }))
     }
 
     pub fn load() -> Result<Self, ConfigError> {
@@ -248,5 +300,70 @@ mod tests {
             config.effective_max_multi_turn(),
             constants::MAX_MULTI_TURN_ITERATIONS
         );
+    }
+
+    #[test]
+    fn context_policy_none_when_window_unset() {
+        let config = Config::default();
+        assert_eq!(config.effective_context_policy().unwrap(), None);
+    }
+
+    #[test]
+    fn context_policy_uses_defaults_for_optional_fields() {
+        let mut config = Config::default();
+        config.context.window_tokens = Some(128_000);
+        let policy = config.effective_context_policy().unwrap().unwrap();
+        assert_eq!(policy.window_tokens, 128_000);
+        assert_eq!(policy.reserve_tokens, constants::DEFAULT_RESERVE_TOKENS);
+        assert_eq!(
+            policy.keep_recent_tokens,
+            constants::DEFAULT_KEEP_RECENT_TOKENS
+        );
+    }
+
+    #[test]
+    fn context_policy_rejects_reserve_ge_window() {
+        let mut config = Config::default();
+        config.context.window_tokens = Some(10_000);
+        config.context.reserve_tokens = Some(10_000);
+        let err = config.effective_context_policy().unwrap_err();
+        assert_eq!(err.code(), "config.invalid_context");
+        assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+    }
+
+    #[test]
+    fn context_policy_rejects_keep_ge_available() {
+        let mut config = Config::default();
+        config.context.window_tokens = Some(30_000);
+        config.context.reserve_tokens = Some(16_384);
+        // 可用 = 30000 - 16384 = 13616；keep 等于可用也不合法
+        config.context.keep_recent_tokens = Some(13_616);
+        assert!(config.effective_context_policy().is_err());
+        config.context.keep_recent_tokens = Some(13_615);
+        assert!(config.effective_context_policy().is_ok());
+    }
+
+    #[test]
+    fn load_from_toml_with_context_section() {
+        let dir = std::env::temp_dir().join("togi_config_test_ctx");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("togi.toml");
+        std::fs::write(
+            &path,
+            "[context]\nwindow_tokens = 128000\nreserve_tokens = 8192\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(vec![path.clone()]).unwrap();
+        let policy = config.effective_context_policy().unwrap().unwrap();
+        assert_eq!(policy.window_tokens, 128_000);
+        assert_eq!(policy.reserve_tokens, 8_192);
+        assert_eq!(
+            policy.keep_recent_tokens,
+            constants::DEFAULT_KEEP_RECENT_TOKENS
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 }

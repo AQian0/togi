@@ -16,6 +16,8 @@ path = "tests/integration.rs"
 pretty_assertions = "1.4"
 rstest = "0.26"
 tempfile = "3.22"
+# 复用已有依赖的 test-utils feature（MockCompletionModel），不新增依赖。
+rig = { version = "0.40.0", features = ["test-utils"] }
 
 [dependencies]
 arboard = "3.6.1"

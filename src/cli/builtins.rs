@@ -1,3 +1,4 @@
+use crate::context::ContextCheckpoint;
 use crate::shared::error::TogiError;
 use crate::store::{HistoryStore, SessionMeta};
 use crate::ui::interaction::OutputItem;
@@ -25,6 +26,7 @@ pub async fn handle_command(
     history: &Arc<RwLock<Arc<[Message]>>>,
     store: Option<&Arc<HistoryStore>>,
     session_id: &Arc<RwLock<Arc<str>>>,
+    context: &Arc<RwLock<ContextCheckpoint>>,
 ) -> bool {
     // 先拆分命令和参数
     let mut parts = line.splitn(2, ' ');
@@ -50,12 +52,19 @@ pub async fn handle_command(
             let count = guard.len();
             *guard = Arc::from(Vec::new());
             drop(guard);
+            *context.write().await = ContextCheckpoint::default();
             let sid = session_id.read().await.clone();
             if let Some(store) = store {
                 if let Err(err) = store.clear(&sid).await {
                     send_notice(
                         &tx,
                         &crate::t!("store-clear-error", error = err.user_message()),
+                    );
+                }
+                if let Err(err) = store.clear_context(&sid).await {
+                    send_notice(
+                        &tx,
+                        &crate::t!("context-save-error", error = err.user_message()),
                     );
                 }
             }
@@ -140,6 +149,21 @@ pub async fn handle_command(
                             let count = messages.len();
                             *history.write().await = Arc::from(messages);
                             *session_id.write().await = Arc::from(target_sid.as_str());
+                            match store.load_context(&target_sid).await {
+                                Ok(checkpoint) => {
+                                    *context.write().await = checkpoint;
+                                }
+                                Err(err) => {
+                                    *context.write().await = ContextCheckpoint::default();
+                                    send_notice(
+                                        &tx,
+                                        &crate::t!(
+                                            "context-load-error",
+                                            error = err.user_message()
+                                        ),
+                                    );
+                                }
+                            }
                             send_notice(
                                 &tx,
                                 &crate::t!("builtins-switch-done", id = target_sid, count = count),
@@ -172,6 +196,7 @@ pub async fn handle_command(
                 Ok(new_sid) => {
                     *history.write().await = Arc::from(Vec::new());
                     *session_id.write().await = Arc::from(new_sid.as_str());
+                    *context.write().await = ContextCheckpoint::default();
                     send_notice(
                         &tx,
                         &crate::t!("builtins-new-done", id = new_sid, title = title),

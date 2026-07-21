@@ -111,7 +111,13 @@ impl HistoryStore {
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session
-                ON messages(session_id, id);",
+                ON messages(session_id, id);
+            CREATE TABLE IF NOT EXISTS context_checkpoints (
+                session_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                covered_messages INTEGER NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
         )
         .await
         .map_err(|source| StoreError::Query { source })?;
@@ -218,6 +224,77 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// 加载指定会话的上下文 checkpoint。
+    ///
+    /// checkpoint 是可重建的派生数据：覆盖位置超过当前消息数量时
+    /// （例如历史被外部改写）自动失效，返回空 checkpoint。
+    pub async fn load_context(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::context::ContextCheckpoint, StoreError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT summary, covered_messages FROM context_checkpoints \
+                 WHERE session_id = ?1",
+                [session_id],
+            )
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|source| StoreError::Query { source })?
+        else {
+            return Ok(crate::context::ContextCheckpoint::default());
+        };
+        let summary: String = row.get(0).map_err(|source| StoreError::Query { source })?;
+        let covered: i64 = row.get(1).map_err(|source| StoreError::Query { source })?;
+        let covered = usize::try_from(covered).unwrap_or(0);
+        if covered > self.count(session_id).await? {
+            return Ok(crate::context::ContextCheckpoint::default());
+        }
+        Ok(crate::context::ContextCheckpoint {
+            summary: (!summary.is_empty()).then_some(summary),
+            covered_messages: covered,
+        })
+    }
+
+    /// 保存（upsert）指定会话的上下文 checkpoint。应在消息保存成功后调用。
+    pub async fn save_context(
+        &self,
+        session_id: &str,
+        checkpoint: &crate::context::ContextCheckpoint,
+    ) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "INSERT INTO context_checkpoints (session_id, summary, covered_messages, updated_at)
+                 VALUES (?1, ?2, ?3, datetime('now'))
+                 ON CONFLICT(session_id) DO UPDATE SET
+                     summary = ?2, covered_messages = ?3, updated_at = datetime('now')",
+                turso::params_from_iter([
+                    turso::Value::from(session_id),
+                    turso::Value::from(checkpoint.summary.clone().unwrap_or_default()),
+                    turso::Value::from(checkpoint.covered_messages as i64),
+                ]),
+            )
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        Ok(())
+    }
+
+    /// 删除指定会话的上下文 checkpoint。
+    pub async fn clear_context(&self, session_id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM context_checkpoints WHERE session_id = ?1",
+                [session_id],
+            )
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        Ok(())
+    }
+
     /// 统计指定会话的消息条数。
     pub async fn count(&self, session_id: &str) -> Result<usize, StoreError> {
         let mut rows = self
@@ -282,10 +359,17 @@ impl HistoryStore {
         Ok(id)
     }
 
-    /// 删除指定会话及其全部消息。
+    /// 删除指定会话及其全部消息与上下文 checkpoint。
     pub async fn delete_session(&self, session_id: &str) -> Result<(), StoreError> {
         self.conn
             .execute("DELETE FROM messages WHERE session_id = ?1", [session_id])
+            .await
+            .map_err(|source| StoreError::Query { source })?;
+        self.conn
+            .execute(
+                "DELETE FROM context_checkpoints WHERE session_id = ?1",
+                [session_id],
+            )
             .await
             .map_err(|source| StoreError::Query { source })?;
         self.conn
@@ -303,6 +387,7 @@ impl HistoryStore {
 /// - Linux: `~/.local/share/togi/`
 /// - macOS: `~/Library/Application Support/togi/`
 /// - Windows: `%APPDATA%\togi\`
+///
 /// 返回 `None` 表示无法确定路径，此时应用应静默降级为纯内存模式。
 pub fn default_db_path() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os(constants::ENV_DB_PATH)
@@ -461,5 +546,84 @@ mod tests {
             .unwrap();
         let sessions = store.list_sessions().await.unwrap();
         assert!(sessions[0].updated_at >= first_updated);
+    }
+
+    #[tokio::test]
+    async fn context_checkpoint_roundtrip() {
+        use crate::context::ContextCheckpoint;
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        assert_eq!(
+            store.load_context("s1").await.unwrap(),
+            ContextCheckpoint::default()
+        );
+        store
+            .save("s1", &[sample_user_message("a"), sample_user_message("b")])
+            .await
+            .unwrap();
+        let checkpoint = ContextCheckpoint {
+            summary: Some("摘要".into()),
+            covered_messages: 1,
+        };
+        store.save_context("s1", &checkpoint).await.unwrap();
+        assert_eq!(store.load_context("s1").await.unwrap(), checkpoint);
+        // upsert 覆盖
+        let updated = ContextCheckpoint {
+            summary: Some("新摘要".into()),
+            covered_messages: 2,
+        };
+        store.save_context("s1", &updated).await.unwrap();
+        assert_eq!(store.load_context("s1").await.unwrap(), updated);
+        // clear 删除
+        store.clear_context("s1").await.unwrap();
+        assert_eq!(
+            store.load_context("s1").await.unwrap(),
+            ContextCheckpoint::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn context_checkpoint_invalidated_when_covered_exceeds_messages() {
+        use crate::context::ContextCheckpoint;
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        store
+            .save("s1", &[sample_user_message("only")])
+            .await
+            .unwrap();
+        store
+            .save_context(
+                "s1",
+                &ContextCheckpoint {
+                    summary: Some("stale".into()),
+                    covered_messages: 5,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.load_context("s1").await.unwrap(),
+            ContextCheckpoint::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_session_removes_context_checkpoint() {
+        use crate::context::ContextCheckpoint;
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        store.save("s1", &[sample_user_message("a")]).await.unwrap();
+        store
+            .save_context(
+                "s1",
+                &ContextCheckpoint {
+                    summary: Some("s".into()),
+                    covered_messages: 1,
+                },
+            )
+            .await
+            .unwrap();
+        store.delete_session("s1").await.unwrap();
+        assert_eq!(
+            store.load_context("s1").await.unwrap(),
+            ContextCheckpoint::default()
+        );
     }
 }

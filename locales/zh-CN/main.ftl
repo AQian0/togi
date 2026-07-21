@@ -104,6 +104,16 @@ error-modify-io = 修改 `{ $path }` 时发生 IO 错误：{ $error }
 app-io-error = { $context }时发生 IO 错误：{ $error }
 config-read-error = 无法读取配置文件 { $path }：{ $error }
 config-parse-error = 配置文件 { $path } 解析失败：{ $error }
+config-context-reserve-too-big = [context] 配置非法：reserve_tokens（{ $reserve }）必须小于 window_tokens（{ $window }）
+config-context-keep-too-big = [context] 配置非法：keep_recent_tokens（{ $keep }）必须小于 window_tokens - reserve_tokens（{ $available }）
+
+# ── Context window ─────────────────────────────────────────────────
+context-compacted = 上下文已压缩：{ $count } 条较早消息并入滚动摘要。
+context-compact-failed = 上下文压缩失败：{ $error }（继续使用当前上下文）
+context-compact-impossible = 上下文窗口已超限且不存在安全的压缩切点（{ $error }），请 /clear 或开启新会话。
+context-overflow-retry = 模型返回上下文窗口溢出，正在压缩历史并重试…
+context-save-error = 无法保存上下文 checkpoint：{ $error }
+context-load-error = 无法加载上下文 checkpoint：{ $error }
 
 # ── Conversation ─────────────────────────────────────────────────────
 conv-user-label = 用户

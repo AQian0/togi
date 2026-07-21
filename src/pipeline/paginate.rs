@@ -8,10 +8,7 @@ use std::fmt::Write;
 pub const OFFSET_PARAM: &str = "offset";
 pub const LIMIT_PARAM: &str = "limit";
 
-pub fn paginate(
-    default_limit: usize,
-    tools: Vec<Box<dyn ToolDyn>>,
-) -> Vec<Box<dyn ToolDyn>> {
+pub fn paginate(default_limit: usize, tools: Vec<Box<dyn ToolDyn>>) -> Vec<Box<dyn ToolDyn>> {
     tools
         .into_iter()
         .map(|tool| wrap(tool, default_limit))
@@ -206,11 +203,7 @@ mod tests {
         assert!(out.starts_with(&format!("{head}\n")));
         assert!(out.contains("a\nb\n"));
         assert!(!out.contains("\nc\n"));
-        assert!(out.contains(&crate::t!(
-            "paginate-more-lines",
-            count = 3,
-            offset = 3
-        )));
+        assert!(out.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
     }
 
     #[test]
@@ -218,11 +211,7 @@ mod tests {
         let out = paginate_text("a\nb\nc\nd\ne\n", None, None, 2);
         let head = crate::t!("paginate-showing", start = 1, end = 2, total = 5);
         assert!(out.starts_with(&format!("{head}\n")));
-        assert!(out.contains(&crate::t!(
-            "paginate-more-lines",
-            count = 3,
-            offset = 3
-        )));
+        assert!(out.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
     }
 
     #[test]
@@ -325,11 +314,7 @@ mod tests {
         assert!(output.contains("l3\n"));
         assert!(!output.contains("l1"));
         assert!(!output.contains("l4"));
-        assert!(output.contains(&crate::t!(
-            "paginate-more-lines",
-            count = 2,
-            offset = 4
-        )));
+        assert!(output.contains(&crate::t!("paginate-more-lines", count = 2, offset = 4)));
     }
 
     #[tokio::test]
@@ -342,11 +327,7 @@ mod tests {
             "{}\n",
             crate::t!("paginate-showing", start = 1, end = 2, total = 5)
         )));
-        assert!(output.contains(&crate::t!(
-            "paginate-more-lines",
-            count = 3,
-            offset = 3
-        )));
+        assert!(output.contains(&crate::t!("paginate-more-lines", count = 3, offset = 3)));
     }
 
     #[tokio::test]
@@ -364,10 +345,7 @@ mod tests {
     async fn paginate_returns_tool_vec_for_vec_input() {
         let tools: Vec<Box<dyn ToolDyn>> = paginate(
             0,
-            vec![
-                Box::new(RawEcho) as Box<dyn ToolDyn>,
-                Box::new(FixedLines),
-            ],
+            vec![Box::new(RawEcho) as Box<dyn ToolDyn>, Box::new(FixedLines)],
         );
         assert_eq!(tools.len(), 2);
     }
