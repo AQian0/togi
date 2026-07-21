@@ -131,6 +131,7 @@ store-load-error = Could not load conversation history: { $error }
 store-clear-error = Could not clear stored history: { $error }
 store-open-error = Could not open database { $path }: { $error }
 store-query-error = Database query failed: { $error }
+store-history-truncated = Skipped { $dropped } unreadable history message(s) (incompatible format version); continuing from the readable prefix.
 store-deserialize-error = Could not deserialize stored message: { $error }
 
 # ── Modify tool output ───────────────────────────────────────────────

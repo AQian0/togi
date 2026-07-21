@@ -145,13 +145,19 @@ pub async fn handle_command(
                     }
                     // 加载目标会话历史
                     match store.load(&target_sid).await {
-                        Ok(messages) => {
-                            let count = messages.len();
-                            *history.write().await = Arc::from(messages);
+                        Ok(report) => {
+                            let count = report.messages.len();
+                            let dropped = report.dropped_rows;
+                            *history.write().await = Arc::from(report.messages);
                             *session_id.write().await = Arc::from(target_sid.as_str());
                             match store.load_context(&target_sid).await {
                                 Ok(checkpoint) => {
-                                    *context.write().await = checkpoint;
+                                    // 加载截断可能使 checkpoint 越过历史末尾，作废重建。
+                                    *context.write().await = if checkpoint.is_valid_for(count) {
+                                        checkpoint
+                                    } else {
+                                        ContextCheckpoint::default()
+                                    };
                                 }
                                 Err(err) => {
                                     *context.write().await = ContextCheckpoint::default();
@@ -168,6 +174,12 @@ pub async fn handle_command(
                                 &tx,
                                 &crate::t!("builtins-switch-done", id = target_sid, count = count),
                             );
+                            if dropped > 0 {
+                                send_notice(
+                                    &tx,
+                                    &crate::t!("store-history-truncated", dropped = dropped),
+                                );
+                            }
                         }
                         Err(err) => {
                             send_notice(

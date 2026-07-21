@@ -26,6 +26,10 @@ pub(crate) const TOOL_RESULT_GRACE: Duration =
 /// [`TOOL_RESULT_GRACE`] 在工具超时上限之上的余量（秒）。
 const TOOL_RESULT_GRACE_MARGIN_SECS: u64 = 30;
 
+/// 退出时等待 stream_chat 走取消路径收尾部分历史的上限。
+/// 超时仍未收尾则放弃（进程正在退出，剩余部分历史可丢弃）。
+pub(crate) const CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// 系统提示词默认值。
 pub(crate) const DEFAULT_PREAMBLE: &str = "\
 你是一个运行在终端里的中文编程助手，回答要简洁、准确。\

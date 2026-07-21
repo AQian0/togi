@@ -2,11 +2,63 @@
 //!
 //! 将会话消息以 JSON 序列化形式存入本地 SQLite 数据库，实现跨会话恢复。
 //! 仅在启用历史恢复功能时使用；数据库不可用时静默降级为纯内存模式。
+//!
+//! 消息 `content` 列采用带版本的 envelope：`{"v":1,"data":<Message>}`。
+//! 无版本字段的行按 v0（裸 Message，早期版本写入）兼容解析。某行无法
+//! 解码时（rig 格式漂移或更新版本写入）加载截断至该行之前，保留可解码
+//! 前缀并报告丢弃行数，而不是整段失败。
 
 use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
-use rig::message::Message;
+use rig::message::{AssistantContent, Message};
 use std::path::{Path, PathBuf};
+
+/// 消息 `content` 列的当前持久化格式版本。
+const MESSAGE_SCHEMA_VERSION: u64 = 1;
+
+/// [`HistoryStore::load`] 的结果：成功解码的消息前缀 + 因无法解码
+/// （版本不兼容或数据损坏）而被跳过的行数。
+#[derive(Debug, Default)]
+pub struct LoadReport {
+    pub messages: Vec<Message>,
+    pub dropped_rows: usize,
+}
+
+/// 编码一条消息为带版本的 envelope。
+fn encode_message(msg: &Message) -> Result<String, serde_json::Error> {
+    let data = serde_json::to_value(msg)?;
+    serde_json::to_string(&serde_json::json!({
+        "v": MESSAGE_SCHEMA_VERSION,
+        "data": data,
+    }))
+}
+
+/// 解码一行 `content`：含版本字段按 envelope 解析（仅接受当前版本，
+/// 更高版本视为不可解码）；无版本字段按 v0 裸 Message 兼容解析。
+/// 返回 `None` 表示该行无法解码。
+fn decode_message(raw: &str) -> Option<Message> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    if let Some(v) = value.get("v").and_then(serde_json::Value::as_u64) {
+        if v != MESSAGE_SCHEMA_VERSION {
+            return None;
+        }
+        return serde_json::from_value(value.get("data")?.clone()).ok();
+    }
+    serde_json::from_value(value).ok()
+}
+
+/// 剥离历史末尾的悬空工具调用：截断点可能落在 assistant tool call 与
+/// 对应 result 之间，多数 provider 拒绝存在无 result 的 tool call 的历史。
+/// 规则与 `agent::PartialTurn::finish` 一致。
+fn strip_dangling_tool_calls(messages: &mut Vec<Message>) {
+    while matches!(
+        messages.last(),
+        Some(Message::Assistant { content, .. })
+            if content.iter().any(|c| matches!(c, AssistantContent::ToolCall(_)))
+    ) {
+        messages.pop();
+    }
+}
 
 /// 历史持久化错误。
 #[derive(Debug, thiserror::Error)]
@@ -131,8 +183,12 @@ impl HistoryStore {
         &self.path
     }
 
-    /// 加载指定会话的全部消息，按插入顺序返回。
-    pub async fn load(&self, session_id: &str) -> Result<Vec<Message>, StoreError> {
+    /// 加载指定会话的消息历史，按插入顺序返回。
+    ///
+    /// 某行无法解码时截断至该行之前（后续行可能依赖被跳过的工具往返，
+    /// 继续加载会产出语义断裂的历史），并剥离末尾悬空的工具调用；
+    /// 调用方应在 `dropped_rows > 0` 时向用户提示。
+    pub async fn load(&self, session_id: &str) -> Result<LoadReport, StoreError> {
         let mut rows = self
             .conn
             .query(
@@ -141,24 +197,37 @@ impl HistoryStore {
             )
             .await
             .map_err(|source| StoreError::Query { source })?;
-        let mut messages = Vec::new();
+        let mut raws = Vec::new();
         while let Some(row) = rows
             .next()
             .await
             .map_err(|source| StoreError::Query { source })?
         {
-            let json: String = row.get(0).map_err(|source| StoreError::Query { source })?;
-            let msg: Message =
-                serde_json::from_str(&json).map_err(|source| StoreError::Deserialize { source })?;
-            messages.push(msg);
+            let raw: String = row.get(0).map_err(|source| StoreError::Query { source })?;
+            raws.push(raw);
         }
-        Ok(messages)
+        let mut messages = Vec::with_capacity(raws.len());
+        let mut dropped_rows = 0;
+        for raw in &raws {
+            match decode_message(raw) {
+                Some(msg) => messages.push(msg),
+                None => {
+                    dropped_rows = raws.len() - messages.len();
+                    break;
+                }
+            }
+        }
+        strip_dangling_tool_calls(&mut messages);
+        Ok(LoadReport {
+            messages,
+            dropped_rows,
+        })
     }
 
     /// 全量替换指定会话的消息历史。
     pub async fn save(&self, session_id: &str, messages: &[Message]) -> Result<(), StoreError> {
-        // ponytail: 依赖"会话历史只增不改"的事实做增量写入，已存前缀跳过序列化和插入。
-        // 若未来加入历史压缩/重写功能，需退回全量替换。
+        // ponytail: 依赖"会话历史只增不改"的常态做增量写入，已存前缀跳过序列化和插入。
+        // 历史变短（加载截断不可解码行、或未来的历史重写功能）时退化为全量替换。
         let existing = self.count(session_id).await?;
         let tx = turso::transaction::Transaction::new_unchecked(
             &self.conn,
@@ -182,7 +251,8 @@ impl HistoryStore {
         let pending = if existing <= messages.len() {
             &messages[existing..]
         } else {
-            // 历史变短（当前不会发生），退化为全量替换。
+            // 历史变短（例如加载时截断了不可解码行），退化为全量替换：
+            // 不可解码的行对本版本已不可读，随替换清除，DB 与内存收敛。
             tx.execute("DELETE FROM messages WHERE session_id = ?1", [session_id])
                 .await
                 .map_err(|source| StoreError::Query { source })?;
@@ -198,8 +268,7 @@ impl HistoryStore {
                 Message::Assistant { .. } => "assistant",
                 Message::System { .. } => "system",
             };
-            let json =
-                serde_json::to_string(msg).map_err(|source| StoreError::Deserialize { source })?;
+            let json = encode_message(msg).map_err(|source| StoreError::Deserialize { source })?;
             stmt.execute(turso::params_from_iter([
                 turso::Value::from(session_id),
                 turso::Value::from(role),
@@ -436,7 +505,7 @@ mod tests {
         ];
         store.save("s1", &msgs).await.unwrap();
         let loaded = store.load("s1").await.unwrap();
-        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded.messages.len(), 2);
     }
 
     #[tokio::test]
@@ -450,7 +519,7 @@ mod tests {
         ];
         store.save("s1", &second).await.unwrap();
         let loaded = store.load("s1").await.unwrap();
-        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded.messages.len(), 2);
     }
 
     #[tokio::test]
@@ -467,7 +536,7 @@ mod tests {
     async fn load_empty_session_returns_empty() {
         let store = HistoryStore::open(":memory:").await.unwrap();
         let loaded = store.load("nonexistent").await.unwrap();
-        assert!(loaded.is_empty());
+        assert!(loaded.messages.is_empty());
     }
 
     #[tokio::test]
@@ -625,5 +694,124 @@ mod tests {
             store.load_context("s1").await.unwrap(),
             ContextCheckpoint::default()
         );
+    }
+
+    // ── 消息格式版本化与容错加载 ─────────────────────────────────
+
+    use rig::message::{
+        AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    };
+
+    fn assistant_tool_call_message() -> Message {
+        Message::Assistant {
+            id: None,
+            content: OneOrMany::one(AssistantContent::ToolCall(ToolCall::new(
+                "c1".into(),
+                ToolFunction::new("shell".into(), serde_json::json!({})),
+            ))),
+        }
+    }
+
+    /// 直接向 messages 表写入一行原始 content（绕过 encode）。
+    async fn insert_raw(store: &HistoryStore, session_id: &str, role: &str, content: &str) {
+        store
+            .conn
+            .execute(
+                "INSERT INTO messages (session_id, role, content) VALUES (?1, ?2, ?3)",
+                turso::params_from_iter([
+                    turso::Value::from(session_id),
+                    turso::Value::from(role),
+                    turso::Value::from(content),
+                ]),
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_bare_message_loads_as_v0() {
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        let raw = serde_json::to_string(&sample_user_message("old")).unwrap();
+        insert_raw(&store, "s1", "user", &raw).await;
+        let report = store.load("s1").await.unwrap();
+        assert_eq!(report.messages.len(), 1);
+        assert_eq!(report.dropped_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn undecodable_row_truncates_load_with_dropped_count() {
+        // 数据损坏与未知未来版本走同一截断分支
+        for bad_row in ["not json at all", r#"{"v":99,"data":{}}"#] {
+            let store = HistoryStore::open(":memory:").await.unwrap();
+            store
+                .save(
+                    "s1",
+                    &[sample_user_message("a"), sample_assistant_message("b")],
+                )
+                .await
+                .unwrap();
+            insert_raw(&store, "s1", "assistant", bad_row).await;
+            let report = store.load("s1").await.unwrap();
+            assert_eq!(report.messages.len(), 2, "row: {bad_row}");
+            assert_eq!(report.dropped_rows, 1, "row: {bad_row}");
+        }
+    }
+
+    #[tokio::test]
+    async fn truncation_strips_dangling_tool_call() {
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        store
+            .save(
+                "s1",
+                &[sample_user_message("run it"), assistant_tool_call_message()],
+            )
+            .await
+            .unwrap();
+        // 截断点在 tool call 与 result 之间：悬空调用必须剥离
+        insert_raw(&store, "s1", "user", "corrupt result row").await;
+        let report = store.load("s1").await.unwrap();
+        assert_eq!(report.messages.len(), 1);
+        assert_eq!(report.dropped_rows, 1);
+        assert!(matches!(&report.messages[0], Message::User { .. }));
+    }
+
+    #[tokio::test]
+    async fn envelope_roundtrip_preserves_tool_pairs() {
+        let store = HistoryStore::open(":memory:").await.unwrap();
+        let msgs = vec![
+            sample_user_message("run it"),
+            assistant_tool_call_message(),
+            Message::User {
+                content: OneOrMany::one(rig::message::UserContent::ToolResult(ToolResult {
+                    id: "c1".into(),
+                    call_id: None,
+                    content: OneOrMany::one(ToolResultContent::Text(Text::new("done"))),
+                })),
+            },
+        ];
+        store.save("s1", &msgs).await.unwrap();
+        // 写入格式为带版本 envelope
+        let mut rows = store
+            .conn
+            .query(
+                "SELECT content FROM messages WHERE session_id = 's1'",
+                turso::params_from_iter(std::iter::empty::<turso::Value>()),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let raw: String = row.get(0).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value.get("v").and_then(|v| v.as_u64()), Some(1));
+        assert!(value.get("data").is_some());
+        // 读回内容保真
+        let report = store.load("s1").await.unwrap();
+        // rig 的 serde 实现将 None 序列化为 {}、再读回为 Some({})，
+        // 精确等值不成立；按序列化形式比较（落盘的本来就是序列化形式）。
+        assert_eq!(
+            serde_json::to_value(&report.messages).unwrap(),
+            serde_json::to_value(&msgs).unwrap()
+        );
+        assert_eq!(report.dropped_rows, 0);
     }
 }

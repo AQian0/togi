@@ -31,7 +31,7 @@ async fn open_and_empty_load() {
     let db_path = dir.path().join("test.db");
     let store = HistoryStore::open(&db_path).await.unwrap();
     let loaded = store.load("default").await.unwrap();
-    assert!(loaded.is_empty());
+    assert!(loaded.messages.is_empty());
 }
 
 #[tokio::test]
@@ -42,7 +42,7 @@ async fn save_and_load_roundtrip() {
     let msgs = sample_conversation();
     store.save("default", &msgs).await.unwrap();
     let loaded = store.load("default").await.unwrap();
-    assert_eq!(loaded.len(), 4);
+    assert_eq!(loaded.messages.len(), 4);
 }
 
 #[tokio::test]
@@ -53,12 +53,12 @@ async fn save_replaces_previous_history() {
 
     store.save("default", &[user_msg("first")]).await.unwrap();
     let loaded = store.load("default").await.unwrap();
-    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded.messages.len(), 1);
 
     let new_msgs = sample_conversation();
     store.save("default", &new_msgs).await.unwrap();
     let loaded = store.load("default").await.unwrap();
-    assert_eq!(loaded.len(), 4);
+    assert_eq!(loaded.messages.len(), 4);
 }
 
 #[tokio::test]
@@ -72,7 +72,7 @@ async fn save_with_shorter_history_falls_back_to_full_replace() {
 
     store.save("default", &[user_msg("only")]).await.unwrap();
     let loaded = store.load("default").await.unwrap();
-    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded.messages.len(), 1);
 }
 
 #[tokio::test]
@@ -86,7 +86,7 @@ async fn clear_removes_all_messages() {
     store.clear("default").await.unwrap();
     assert_eq!(store.count("default").await.unwrap(), 0);
     let loaded = store.load("default").await.unwrap();
-    assert!(loaded.is_empty());
+    assert!(loaded.messages.is_empty());
 }
 
 #[tokio::test]
@@ -104,9 +104,9 @@ async fn reopen_and_load_persisted_history() {
     {
         let store = HistoryStore::open(&db_path).await.unwrap();
         let loaded = store.load("default").await.unwrap();
-        assert_eq!(loaded.len(), 4);
-        assert!(matches!(loaded[0], Message::User { .. }));
-        assert!(matches!(loaded[1], Message::Assistant { .. }));
+        assert_eq!(loaded.messages.len(), 4);
+        assert!(matches!(loaded.messages[0], Message::User { .. }));
+        assert!(matches!(loaded.messages[1], Message::Assistant { .. }));
     }
 }
 
@@ -172,7 +172,7 @@ async fn context_checkpoint_survives_reopen() {
         // 重新打开（旧数据库自动创建新表）后 checkpoint 与 transcript 都在
         let store = HistoryStore::open(&db_path).await.unwrap();
         assert_eq!(store.load_context("default").await.unwrap(), checkpoint);
-        assert_eq!(store.load("default").await.unwrap().len(), 4);
+        assert_eq!(store.load("default").await.unwrap().messages.len(), 4);
     }
 }
 
@@ -196,8 +196,8 @@ async fn summary_does_not_change_transcript() {
         .unwrap();
     // 完整 transcript 不因摘要 checkpoint 改变
     let after = store.load("default").await.unwrap();
-    assert_eq!(before, after);
-    assert_eq!(after.len(), 4);
+    assert_eq!(before.messages, after.messages);
+    assert_eq!(after.messages.len(), 4);
 }
 
 #[tokio::test]

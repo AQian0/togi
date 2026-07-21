@@ -1,4 +1,4 @@
-use crate::agent::DynamicAgent;
+use crate::agent::{ChatOutcome, DynamicAgent, TurnFailure};
 use crate::cli::command::Args;
 use crate::context::{ContextCheckpoint, ContextInput, ContextPolicy};
 use crate::pipeline::inject::{CWD_PARAM, inject};
@@ -16,6 +16,7 @@ use crate::ui::theme::CatppuccinFlavor;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;
 use rig::tool::ToolDyn;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -160,20 +161,29 @@ impl AppController {
             }
         });
 
-        let result = tokio::select! {
-            _ = self.task_cancel.cancelled() => {
-                forward_task.abort();
-                let _ = tx.send(OutputItem::Notice(crate::t!("app-cancelled")));
-                let _ = tx.send(OutputItem::Done);
-                return;
-            }
-            r = self.agent.stream_chat(&message, hist, ContextInput {
-                policy: self.context_policy,
-                checkpoint: self.context.read().await.clone(),
-            }, agent_tx, cancel_rx) => r,
-        };
+        let result = drive_chat(
+            self.agent.stream_chat(
+                &message,
+                hist,
+                ContextInput {
+                    policy: self.context_policy,
+                    checkpoint: self.context.read().await.clone(),
+                },
+                agent_tx,
+                cancel_rx,
+            ),
+            &self.task_cancel,
+            &self.cancel_tx,
+            &tx,
+        )
+        .await;
         let _ = forward_task.await;
 
+        let Some(result) = result else {
+            // 取消收尾超时：进程正在退出，直接结束。
+            let _ = tx.send(OutputItem::Done);
+            return;
+        };
         match result {
             Ok(outcome) => {
                 *self.history.write().await = Arc::from(outcome.history);
@@ -189,6 +199,32 @@ impl AppController {
                 let _ = tx.send(OutputItem::Error(ErrorInfo::from_error(&failure.source)));
                 let _ = tx.send(OutputItem::Done);
             }
+        }
+    }
+}
+
+/// 等待一次提交完成；全局取消（退出）时复用 Esc 取消路径收尾：
+/// 向 `cancel_tx` 发取消信号，让 `stream_chat` 自行整理本轮部分历史
+/// 并正常返回，而不是直接 drop future——否则本轮已完成的工具往返
+/// （副作用已写盘）会从历史中凭空消失且不落盘。
+///
+/// 超过 [`constants::CANCEL_DRAIN_TIMEOUT`] 未收尾则放弃，返回 `None`。
+async fn drive_chat(
+    chat: impl Future<Output = Result<ChatOutcome, TurnFailure>>,
+    task_cancel: &CancellationToken,
+    cancel_tx: &watch::Sender<bool>,
+    tx: &UiSender,
+) -> Option<Result<ChatOutcome, TurnFailure>> {
+    tokio::pin!(chat);
+    tokio::select! {
+        biased;
+        r = &mut chat => Some(r),
+        _ = task_cancel.cancelled() => {
+            let _ = tx.send(OutputItem::Notice(crate::t!("app-cancelled")));
+            let _ = cancel_tx.send_replace(true);
+            tokio::time::timeout(constants::CANCEL_DRAIN_TIMEOUT, &mut chat)
+                .await
+                .ok()
         }
     }
 }
@@ -293,13 +329,19 @@ async fn init_history() -> (
         Ok(store) => {
             let store = Arc::new(store);
             let sid = session_id.read().await.clone();
-            let messages = store.load(&sid).await.unwrap_or_else(|err| {
+            let report = store.load(&sid).await.unwrap_or_else(|err| {
                 eprintln!(
                     "{}",
                     crate::t!("store-load-error", error = err.user_message())
                 );
-                Vec::new()
+                crate::store::LoadReport::default()
             });
+            if report.dropped_rows > 0 {
+                eprintln!(
+                    "{}",
+                    crate::t!("store-history-truncated", dropped = report.dropped_rows)
+                );
+            }
             let checkpoint = store.load_context(&sid).await.unwrap_or_else(|err| {
                 eprintln!(
                     "{}",
@@ -307,7 +349,13 @@ async fn init_history() -> (
                 );
                 ContextCheckpoint::default()
             });
-            let history = Arc::new(RwLock::new(Arc::from(messages)));
+            // 加载截断可能使 checkpoint 越过历史末尾，作废重建。
+            let checkpoint = if checkpoint.is_valid_for(report.messages.len()) {
+                checkpoint
+            } else {
+                ContextCheckpoint::default()
+            };
+            let history = Arc::new(RwLock::new(Arc::from(report.messages)));
             (
                 history,
                 Some(store),
@@ -399,4 +447,31 @@ pub async fn run() -> crate::shared::error::Result<()> {
     global_cancel.cancel();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 全局取消时复用 Esc 取消路径：等待 chat 收尾并返回部分历史，
+    /// 而不是直接 drop future 丢弃本轮已完成的工具往返。
+    #[tokio::test]
+    async fn drive_chat_drains_partial_history_on_cancel() {
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let chat = async move {
+            // 模拟 stream_chat 的取消收尾：收到取消信号后返回部分历史
+            cancel_rx.changed().await.unwrap();
+            Ok(ChatOutcome {
+                history: vec![Message::user("partial")],
+                context: ContextCheckpoint::default(),
+            })
+        };
+        token.cancel();
+        let result = drive_chat(chat, &token, &cancel_tx, &tx).await;
+        let outcome = result.expect("cancel should drain, not drop");
+        let outcome = outcome.expect("chat should succeed");
+        assert_eq!(outcome.history.len(), 1);
+    }
 }

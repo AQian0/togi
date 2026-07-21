@@ -131,6 +131,7 @@ store-load-error = 无法加载对话历史：{ $error }
 store-clear-error = 无法清除已存储的历史：{ $error }
 store-open-error = 无法打开数据库 { $path }：{ $error }
 store-query-error = 数据库查询失败：{ $error }
+store-history-truncated = 已跳过 { $dropped } 条无法读取的历史消息（格式版本不兼容），从可读取的前缀继续。
 store-deserialize-error = 无法反序列化存储的消息：{ $error }
 
 # ── Modify tool output ───────────────────────────────────────────────
