@@ -7,7 +7,7 @@ pub mod tools;
 pub mod ui;
 
 pub(crate) mod cli;
-pub(crate) mod pipeline;
+pub mod pipeline;
 pub(crate) mod transform;
 
 pub use shared::error;
