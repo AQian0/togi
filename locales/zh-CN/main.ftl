@@ -55,6 +55,7 @@ agent-missing-api-key = 未设置 { $env } 环境变量
 agent-provider-init = 无法初始化 { $provider } 提供商：{ $source }
 agent-stream-error = 模型流式响应失败：{ $source }
 agent-retrying = 请求失败，{ $delay } 秒后重试（第 { $attempt }/{ $max } 次）…
+agent-stalled = 模型响应停滞：{ $secs } 秒未收到任何数据，连接可能已中断。
 agent-unhandled-output = 收到未处理的提供商输出：{ $value }
 
 # ── Summarize ────────────────────────────────────────────────────────

@@ -15,6 +15,17 @@ pub(crate) const DEFAULT_PAGE_LINES: usize = 400;
 /// Agent 流式对话中允许的最大多轮工具调用循环次数。
 pub(crate) const MAX_MULTI_TURN_ITERATIONS: u32 = 10;
 
+/// 模型流停滞超时：超过此时间未收到任何流式内容即判定连接已死。
+///  reasoning 模型的首 token 可能较慢，但流式增量应持续到达。
+pub(crate) const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 等待工具结果的停滞宽限：工具自身超时上限加余量，余量覆盖结果收尾开销。
+pub(crate) const TOOL_RESULT_GRACE: Duration =
+    Duration::from_secs(MAX_TIMEOUT_SECS + TOOL_RESULT_GRACE_MARGIN_SECS);
+
+/// [`TOOL_RESULT_GRACE`] 在工具超时上限之上的余量（秒）。
+const TOOL_RESULT_GRACE_MARGIN_SECS: u64 = 30;
+
 /// 系统提示词默认值。
 pub(crate) const DEFAULT_PREAMBLE: &str = "\
 你是一个运行在终端里的中文编程助手，回答要简洁、准确。\

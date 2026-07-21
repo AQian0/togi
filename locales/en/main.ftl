@@ -55,6 +55,7 @@ agent-missing-api-key = { $env } environment variable not set
 agent-provider-init = Could not initialize { $provider } provider: { $source }
 agent-stream-error = Model streaming failed: { $source }
 agent-retrying = Request failed, retrying in { $delay }s (attempt { $attempt }/{ $max })…
+agent-stalled = Model stream stalled: no data for { $secs }s; the connection may be dead.
 agent-unhandled-output = received unhandled provider output: { $value }
 
 # ── Summarize ────────────────────────────────────────────────────────

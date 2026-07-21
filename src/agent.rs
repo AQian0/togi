@@ -1,3 +1,4 @@
+use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
 use futures::StreamExt;
 use itertools::Itertools;
@@ -41,6 +42,9 @@ pub enum AgentError {
         #[source]
         source: rig::agent::StreamingError,
     },
+
+    #[error("model stream stalled: no data received for {secs}s")]
+    Stalled { secs: u64 },
 }
 
 impl TogiError for AgentError {
@@ -50,6 +54,7 @@ impl TogiError for AgentError {
             Self::MissingApiKey { .. } => "agent.missing_api_key",
             Self::ProviderInit { .. } => "agent.provider_init",
             Self::Stream { .. } => "agent.stream",
+            Self::Stalled { .. } => "agent.stalled",
         }
     }
 
@@ -59,6 +64,7 @@ impl TogiError for AgentError {
             Self::MissingApiKey { .. } | Self::ProviderInit { .. } | Self::Stream { .. } => {
                 ErrorKind::External
             }
+            Self::Stalled { .. } => ErrorKind::Timeout,
         }
     }
 
@@ -84,6 +90,9 @@ impl TogiError for AgentError {
             Self::Stream { source } => {
                 crate::t!("agent-stream-error", source = source.to_string())
             }
+            Self::Stalled { secs } => {
+                crate::t!("agent-stalled", secs = *secs)
+            }
         }
     }
 }
@@ -102,9 +111,8 @@ pub enum AgentSection {
 pub struct TurnFailure {
     pub source: AgentError,
     pub history: Vec<Message>,
-    /// 是否已产生过任何流式内容（含后来被丢弃的悬空工具调用——
-    /// 其副作用可能已发生，故不可安全重试）。
-    made_progress: bool,
+    /// 本轮失败前是否见过工具调用——见过则副作用可能已发生，不可安全重试。
+    saw_tool_call: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -145,40 +153,37 @@ struct PartialTurn {
     results: Vec<UserContent>,
     /// 已提交的新消息：assistant（含工具调用）与 tool result 用户消息严格成对交替。
     committed: Vec<Message>,
-    /// 是否收到过任何内容（含后来被丢弃的悬空工具调用）。
-    touched: bool,
+    /// 是否见过工具调用（含后来被丢弃的悬空调用）。
+    saw_tool_call: bool,
 }
 
 impl PartialTurn {
     fn push_reasoning_delta(&mut self, delta: &str) {
-        self.touched = true;
         self.flush_results();
         self.reasoning.push_str(delta);
     }
 
     fn push_reasoning(&mut self, reasoning: Reasoning) {
-        self.touched = true;
         self.flush_results();
         self.flush_reasoning();
         self.assistant.push(AssistantContent::Reasoning(reasoning));
     }
 
     fn push_text(&mut self, text: String) {
-        self.touched = true;
         self.flush_results();
         self.flush_reasoning();
         self.assistant.push(AssistantContent::Text(Text::new(text)));
     }
 
     fn push_tool_call(&mut self, tool_call: ToolCall) {
-        self.touched = true;
+        self.saw_tool_call = true;
         self.flush_results();
         self.flush_reasoning();
         self.assistant.push(AssistantContent::ToolCall(tool_call));
     }
 
     fn push_tool_result(&mut self, tool_result: ToolResult) {
-        self.touched = true;
+        self.saw_tool_call = true;
         self.commit_assistant();
         self.results.push(UserContent::ToolResult(tool_result));
     }
@@ -249,18 +254,103 @@ fn canonical_history(err: &rig::agent::StreamingError) -> Option<Vec<Message>> {
     }
 }
 
-/// 判断是否为可重试的瞬态错误：HTTP 429 / 5xx，或无状态码的传输层失败
-/// （连接错误、超时等）。
-fn is_transient(err: &AgentError) -> bool {
-    let AgentError::Stream { source } = err else {
-        return false;
+/// 瞬态错误的类别——决定重试退避的基准时长。
+///
+/// 分类基于 rig 的错误 API（`provider_response_status`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransientKind {
+    /// HTTP 429 限流：需要更长的冷却时间。
+    ///
+    /// ponytail: rig 0.40 的错误 API 只保留状态码与 body、不暴露响应头，
+    /// 拿不到 Retry-After，退化为更长的指数退避；rig 暴露头信息后再接入。
+    RateLimited,
+    /// HTTP 5xx：服务端临时故障。
+    Server,
+    /// 无状态码的传输层失败（连接错误、超时、流停滞）。
+    Transport,
+}
+
+impl TransientKind {
+    /// 判断错误是否瞬态：HTTP 429 / 5xx，或无状态码的传输层失败。
+    fn classify(err: &AgentError) -> Option<Self> {
+        match err {
+            AgentError::Stalled { .. } => Some(Self::Transport),
+            AgentError::Stream { source } => {
+                let rig::agent::StreamingError::Completion(e) = source else {
+                    return None;
+                };
+                match e.provider_response_status() {
+                    Some(status) if status == http::StatusCode::TOO_MANY_REQUESTS => {
+                        Some(Self::RateLimited)
+                    }
+                    Some(status) if status.is_server_error() => Some(Self::Server),
+                    Some(_) => None,
+                    None => matches!(e, rig::completion::CompletionError::HttpError(_))
+                        .then_some(Self::Transport),
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// 一次失败的重试决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryDecision {
+    /// 放弃：永久性错误、已发生工具副作用、或已用完尝试次数。
+    Abort,
+    /// 延迟后重试。
+    Retry { delay: Duration },
+}
+
+/// 普通瞬态错误（5xx / 传输失败）的首次退避时长。
+const BACKOFF_BASE: Duration = Duration::from_secs(1);
+
+/// HTTP 429 的首次退避时长（限流需要更长冷却）。
+const RATE_LIMIT_BACKOFF_BASE: Duration = Duration::from_secs(5);
+
+/// 指数退避增长因子。
+const BACKOFF_FACTOR: u32 = 2;
+
+/// 单次退避时长上限。
+const BACKOFF_MAX: Duration = Duration::from_secs(30);
+
+/// 计算第 `attempt` 次失败后的退避时长：指数退避加抖动，封顶 [`BACKOFF_MAX`]。
+fn backoff_delay(kind: TransientKind, attempt: u32) -> Duration {
+    let base = match kind {
+        TransientKind::RateLimited => RATE_LIMIT_BACKOFF_BASE,
+        TransientKind::Server | TransientKind::Transport => BACKOFF_BASE,
     };
-    let rig::agent::StreamingError::Completion(e) = source else {
-        return false;
-    };
-    match e.provider_response_status() {
-        Some(status) => status.as_u16() == 429 || status.is_server_error(),
-        None => matches!(e, rig::completion::CompletionError::HttpError(_)),
+    let shift = attempt.saturating_sub(1);
+    jittered(base * BACKOFF_FACTOR.pow(shift)).min(BACKOFF_MAX)
+}
+
+/// 在 [0.5x, 1.5x) 区间内抖动，避免固定节拍。
+fn jittered(delay: Duration) -> Duration {
+    let millis = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+    // ponytail: 用系统时间纳秒做廉价随机源，避免引入 rand 依赖；
+    // 单进程重试无需加密级随机性。
+    let entropy = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()))
+        .unwrap_or(0);
+    Duration::from_millis(millis / 2 + entropy % (millis - millis / 2 + 1))
+}
+
+/// 决定一次失败是否重试：仅在未见过工具调用（无副作用风险）、
+/// 错误瞬态、且尝试次数未用尽时重试。
+///
+/// ponytail: 见过工具调用后不重试原输入——那需要 rig 暴露请求边界以续传；
+/// 目前靠部分历史落盘 + 用户继续对话来兜底。
+fn retry_decision(err: &AgentError, saw_tool_call: bool, attempt: u32) -> RetryDecision {
+    if attempt >= MAX_ATTEMPTS || saw_tool_call {
+        return RetryDecision::Abort;
+    }
+    match TransientKind::classify(err) {
+        Some(kind) => RetryDecision::Retry {
+            delay: backoff_delay(kind, attempt),
+        },
+        None => RetryDecision::Abort,
     }
 }
 
@@ -296,17 +386,11 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
         match stream_once(agent, input, history, &tx, &mut cancel_rx, max_multi_turn).await {
             Ok(updated) => return Ok(updated),
             Err(failure) => {
-                // 仅在零进展（未收到任何内容，重试不会造成重复输出或重复
-                // 副作用）且为瞬态错误时重试。ponytail: 多轮工具循环中途的
-                // 请求失败不重试——那需要区分 rig 内部的请求边界，等有实际
-                // 需求再做。
-                if attempt >= MAX_ATTEMPTS
-                    || failure.made_progress
-                    || !is_transient(&failure.source)
-                {
+                let RetryDecision::Retry { delay } =
+                    retry_decision(&failure.source, failure.saw_tool_call, attempt)
+                else {
                     return Err(failure);
-                }
-                let delay = Duration::from_secs(1 << (attempt - 1));
+                };
                 let _ = tx.send(AgentEvent::Notice(crate::t!(
                     "agent-retrying",
                     attempt = attempt + 1,
@@ -323,6 +407,23 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                 }
             }
         }
+    }
+}
+
+/// 构造流停滞失败：保留部分历史，错误标记为停滞（瞬态）。
+fn stall_failure(
+    partial: PartialTurn,
+    input: &str,
+    history: &[Message],
+    waited: Duration,
+) -> TurnFailure {
+    let saw_tool_call = partial.saw_tool_call;
+    TurnFailure {
+        source: AgentError::Stalled {
+            secs: waited.as_secs(),
+        },
+        history: partial.finish(input, history),
+        saw_tool_call,
     }
 }
 
@@ -344,13 +445,30 @@ async fn stream_once<M: CompletionModel + 'static>(
     let mut stream = tokio::select! {
         biased;
         _ = cancel_rx.changed() => return Ok(cancel_return(tx, input, history, partial)),
-        stream = stream_request => stream,
+        stream = tokio::time::timeout(constants::STREAM_STALL_TIMEOUT, stream_request) => match stream {
+            Ok(stream) => stream,
+            Err(_elapsed) => {
+                return Err(stall_failure(partial, input, history, constants::STREAM_STALL_TIMEOUT));
+            }
+        },
     };
+    // 已收到调用、未收到结果的工具数：等待工具结果期间放宽停滞超时，
+    // 因为工具（如 shell）可能合法运行至自身超时上限。
+    let mut pending_tool_calls: u32 = 0;
     loop {
+        let stall = if pending_tool_calls > 0 {
+            constants::TOOL_RESULT_GRACE
+        } else {
+            constants::STREAM_STALL_TIMEOUT
+        };
         let item = tokio::select! {
             biased;
             _ = cancel_rx.changed() => return Ok(cancel_return(tx, input, history, partial)),
-            item = stream.next() => item,
+            item = tokio::time::timeout(stall, stream.next()) => item,
+        };
+        let item = match item {
+            Ok(item) => item,
+            Err(_elapsed) => return Err(stall_failure(partial, input, history, stall)),
         };
         match item {
             Some(Ok(MultiTurnStreamItem::StreamAssistantItem(content))) => match content {
@@ -373,6 +491,7 @@ async fn stream_once<M: CompletionModel + 'static>(
                     tool_call,
                     internal_call_id,
                 } => {
+                    pending_tool_calls = pending_tool_calls.saturating_add(1);
                     partial.push_tool_call(tool_call.clone());
                     let _ = tx.send(AgentEvent::ToolCall {
                         name: tool_call.function.name,
@@ -392,6 +511,7 @@ async fn stream_once<M: CompletionModel + 'static>(
                 tool_result,
                 internal_call_id,
             }))) => {
+                pending_tool_calls = pending_tool_calls.saturating_sub(1);
                 partial.push_tool_result(tool_result.clone());
                 let text: String = tool_result
                     .content
@@ -413,14 +533,14 @@ async fn stream_once<M: CompletionModel + 'static>(
             }
             Some(Ok(_)) => {}
             Some(Err(err)) => {
-                let made_progress = partial.touched;
+                let saw_tool_call = partial.saw_tool_call;
                 let history = match canonical_history(&err) {
                     Some(h) => h,
                     None => partial.finish(input, history),
                 };
                 return Err(TurnFailure {
                     history,
-                    made_progress,
+                    saw_tool_call,
                     source: AgentError::Stream { source: err },
                 });
             }
@@ -730,12 +850,12 @@ mod tests {
     }
 
     #[test]
-    fn dangling_call_marks_progress_despite_unchanged_history() {
+    fn dangling_call_marks_tool_call_seen_despite_unchanged_history() {
         let mut p = PartialTurn::default();
-        assert!(!p.touched);
+        assert!(!p.saw_tool_call);
         p.push_tool_call(tool_call("call-1", "shell"));
-        // 悬空调用被丢弃、历史不变，但已产生过内容——不可安全重试
-        assert!(p.touched);
+        // 悬空调用被丢弃、历史不变，但已见过工具调用——不可安全重试
+        assert!(p.saw_tool_call);
     }
 
     #[test]
@@ -779,26 +899,75 @@ mod tests {
     }
 
     #[test]
-    fn transient_statuses_are_retryable() {
-        assert!(is_transient(&stream_err(
-            http::StatusCode::TOO_MANY_REQUESTS
-        )));
-        assert!(is_transient(&stream_err(
-            http::StatusCode::SERVICE_UNAVAILABLE
-        )));
-        assert!(is_transient(&stream_err(
-            http::StatusCode::INTERNAL_SERVER_ERROR
-        )));
+    fn transient_statuses_are_classified() {
+        assert_eq!(
+            TransientKind::classify(&stream_err(http::StatusCode::TOO_MANY_REQUESTS)),
+            Some(TransientKind::RateLimited)
+        );
+        assert_eq!(
+            TransientKind::classify(&stream_err(http::StatusCode::SERVICE_UNAVAILABLE)),
+            Some(TransientKind::Server)
+        );
+        assert_eq!(
+            TransientKind::classify(&stream_err(http::StatusCode::INTERNAL_SERVER_ERROR)),
+            Some(TransientKind::Server)
+        );
+        assert_eq!(
+            TransientKind::classify(&AgentError::Stalled { secs: 120 }),
+            Some(TransientKind::Transport)
+        );
     }
 
     #[test]
-    fn client_errors_are_not_retryable() {
-        assert!(!is_transient(&stream_err(http::StatusCode::BAD_REQUEST)));
-        assert!(!is_transient(&stream_err(http::StatusCode::UNAUTHORIZED)));
-        assert!(!is_transient(&AgentError::UnknownProvider {
-            model: "x".into(),
-            supported: "y".into(),
-        }));
+    fn permanent_errors_are_not_transient() {
+        assert_eq!(
+            TransientKind::classify(&stream_err(http::StatusCode::BAD_REQUEST)),
+            None
+        );
+        assert_eq!(
+            TransientKind::classify(&stream_err(http::StatusCode::UNAUTHORIZED)),
+            None
+        );
+        assert_eq!(
+            TransientKind::classify(&AgentError::UnknownProvider {
+                model: "x".into(),
+                supported: "y".into(),
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn retry_aborts_after_tool_call_seen() {
+        let err = stream_err(http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(retry_decision(&err, true, 1), RetryDecision::Abort);
+    }
+
+    #[test]
+    fn retry_allowed_before_any_tool_call() {
+        let err = stream_err(http::StatusCode::SERVICE_UNAVAILABLE);
+        assert!(matches!(
+            retry_decision(&err, false, 1),
+            RetryDecision::Retry { .. }
+        ));
+    }
+
+    #[test]
+    fn retry_aborts_when_attempts_exhausted() {
+        let err = stream_err(http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            retry_decision(&err, false, MAX_ATTEMPTS),
+            RetryDecision::Abort
+        );
+    }
+
+    #[test]
+    fn rate_limit_backoff_is_longer_than_server_backoff() {
+        let rate_limited = backoff_delay(TransientKind::RateLimited, 1);
+        let server = backoff_delay(TransientKind::Server, 1);
+        assert!(rate_limited > server);
+        assert!(server >= BACKOFF_BASE / 2);
+        assert!(rate_limited >= RATE_LIMIT_BACKOFF_BASE / 2);
     }
 
     #[test]
