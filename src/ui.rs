@@ -54,8 +54,14 @@ pub enum OutputItem {
     ToolCall {
         name: String,
         summary: String,
+        /// 子代理深度：0 为主代理，≥1 的事件缩进展示。
+        depth: u32,
     },
-    ToolResult(String),
+    ToolResult {
+        text: String,
+        /// 子代理深度：0 为主代理，≥1 的结果行缩进展示。
+        depth: u32,
+    },
     Notice(String),
     Error(ErrorInfo),
     /// 切换会话后重放历史消息

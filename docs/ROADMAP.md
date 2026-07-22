@@ -32,6 +32,11 @@
 
 ### 阶段 1.1：基础子代理（MVP）
 
+> **状态：已完成。** 验收通过（live e2e：委派 → 嵌套事件 → 结论回传）。与原文的实现偏差：
+> - 事件通道与取消信号经 rig `tool_extensions` 按调用注入（工具经 `call_with_extensions` 取用），未引入共享槽位；inject / paginate 包装器同步补了扩展转发。
+> - `AgentEvent` 用 `Child{depth}` 包装变体而非逐变体加 `depth` 字段；UI 只转发子代理的工具活动 / 通知并缩进展示，流式文本不转发（结论作为 `agent` 工具结果完整展示，混入父回答 markdown 流会错乱）。
+> - 工具结果的副作用配对由 FIFO 队列改为按 `internal_call_id` 键控：父子事件交错时 FIFO 会把子结果错配给父调用，导致结论被只读折叠。
+
 - 新增 `src/tools/agent.rs`：`AgentTool`，参数 `{ task: string, profile?: string }`。
 - 子代理定义采用**文件定义**（Q3 已定）：`.togi/agents/*.md`，frontmatter 声明模型 / 工具白名单 / 描述，正文作为该代理的 preamble；格式后续可换，加载器单独成模块便于替换。
 - 内部：`DynamicAgent::build`（可换模型）+ 工具白名单(子代理默认只给 `read`/`shell`,不给 `agent` 自身 → 天然防递归)。
@@ -165,7 +170,7 @@ after = ["analyze"]
 
 | 里程碑 | 内容 | 依赖 |
 |---|---|---|
-| **M1** | 1.1 基础子代理 + 3.2 工具确认 | 无 |
+| **M1** | 1.1 基础子代理 ✅ + 3.2 工具确认 | 无 |
 | **M2** | 1.2 并行子代理 + 2.1 FTS 索引/检索 | M1 |
 | **M3** | 1.3 编排 DAG + 1.4 黑板通信 | M2、Q4 |
 | **M4** | 2.2 向量 RAG + 2.3 长期记忆（+ 3.3 MCP） | Q1、Q2 |

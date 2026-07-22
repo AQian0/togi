@@ -331,7 +331,11 @@ impl Conversation {
                 self.bump_md_version();
                 false
             }
-            OutputItem::ToolCall { name, summary } => {
+            OutputItem::ToolCall {
+                name,
+                summary,
+                depth,
+            } => {
                 self.flush_md();
                 self.md_block = None;
                 let blk = block_tool_call();
@@ -342,13 +346,13 @@ impl Conversation {
                     format!("{name} · {summary}")
                 };
                 self.items.push(ConvItem::Line(ConvLine::block(
-                    label,
+                    indent_label(label, depth),
                     style::tool_call_block(),
                     blk,
                 )));
                 false
             }
-            OutputItem::ToolResult(text) => {
+            OutputItem::ToolResult { text, depth } => {
                 self.flush_md();
                 self.md_block = None;
                 let blk = block_tool_result();
@@ -364,14 +368,17 @@ impl Conversation {
                     let shown = total.min(constants::TOOL_RESULT_MAX_LINES);
                     for line in lines.iter().take(shown) {
                         self.items.push(ConvItem::Line(ConvLine::block(
-                            (*line).to_string(),
+                            indent_line(line, depth),
                             style::tool_result_block(),
                             blk,
                         )));
                     }
                     if total > shown {
                         self.items.push(ConvItem::Line(ConvLine::block(
-                            crate::t!("conv-folded-lines", count = total - shown),
+                            indent_line(
+                                &crate::t!("conv-folded-lines", count = total - shown),
+                                depth,
+                            ),
                             style::tool_result_block(),
                             blk,
                         )));
@@ -432,6 +439,24 @@ impl Conversation {
         };
         self.bump_content_version();
         done
+    }
+}
+
+/// 子代理（depth > 0）工具调用的标签缩进：`↳ read · a.rs`。
+fn indent_label(label: String, depth: u32) -> String {
+    if depth == 0 {
+        label
+    } else {
+        format!("{}↳ {label}", "  ".repeat(depth as usize - 1))
+    }
+}
+
+/// 子代理（depth > 0）工具结果行的缩进。
+fn indent_line(line: &str, depth: u32) -> String {
+    if depth == 0 {
+        line.to_string()
+    } else {
+        format!("{}{line}", "  ".repeat(depth as usize))
     }
 }
 

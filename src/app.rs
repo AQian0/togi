@@ -6,6 +6,7 @@ use crate::pipeline::paginate::paginate;
 use crate::shared::constants;
 use crate::shared::error::TogiError;
 use crate::store::HistoryStore;
+use crate::tools::agent::AgentTool;
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
@@ -16,7 +17,6 @@ use crate::ui::theme::CatppuccinFlavor;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;
 use rig::tool::ToolDyn;
-use std::collections::VecDeque;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -151,11 +151,10 @@ impl AppController {
         let ui_tx = tx.clone();
         let registry = Arc::clone(&self.registry);
         let forward_task = tokio::spawn(async move {
-            // 并发工具执行时 rig 先按调用顺序发完本轮所有 ToolCall，
-            // 再按同一顺序逐个发 ToolResult（rig-core streaming.rs 的
-            // tool_concurrency 保证）；用 FIFO 队列配对调用与结果的
-            // 副作用类别。
-            let mut pending_effects: VecDeque<ToolEffect> = VecDeque::new();
+            // 工具调用与结果按 rig 生成的 internal_call_id 配对
+            // （随机、跨流唯一），父子代理事件交错时仍能正确分类。
+            let mut pending_effects: std::collections::HashMap<String, ToolEffect> =
+                std::collections::HashMap::new();
             while let Some(event) = agent_rx.recv().await {
                 let _ = ui_tx.send(crate::transform::to_output(
                     event,
@@ -257,7 +256,12 @@ async fn preload_highlighting() {
     .await;
 }
 
-fn build_tools(cwd: &Path) -> (Vec<Box<dyn ToolDyn>>, ToolRegistry) {
+fn build_tools(
+    cwd: &Path,
+    subagent_model: &str,
+    api_key: Option<&str>,
+    max_multi_turn: u32,
+) -> (Vec<Box<dyn ToolDyn>>, ToolRegistry) {
     let mut registry = ToolRegistry::new();
 
     // 在工具被 inject / paginate 包装之前注册其副作用分类器。
@@ -266,6 +270,7 @@ fn build_tools(cwd: &Path) -> (Vec<Box<dyn ToolDyn>>, ToolRegistry) {
     registry.register::<Read>();
     registry.register::<Modify>();
     registry.register::<Shell>();
+    registry.register::<AgentTool>();
 
     let tools = paginate(
         constants::DEFAULT_PAGE_LINES,
@@ -275,6 +280,12 @@ fn build_tools(cwd: &Path) -> (Vec<Box<dyn ToolDyn>>, ToolRegistry) {
                 Box::new(Read) as Box<dyn ToolDyn>,
                 Box::new(Modify),
                 Box::new(Shell),
+                Box::new(AgentTool::new(
+                    cwd,
+                    subagent_model.to_string(),
+                    api_key.map(str::to_string),
+                    max_multi_turn,
+                )),
             ],
         ),
     );
@@ -402,7 +413,16 @@ pub async fn run() -> crate::shared::error::Result<()> {
         source,
     })?;
     tracing::debug!(cwd = %cwd.display(), model = ?args.model, "app starting");
-    let (tools, registry) = build_tools(&cwd);
+    let (tools, registry) = build_tools(
+        &cwd,
+        // 子代理缺省模型跟随主代理（profile 可覆盖）。
+        args.model
+            .as_ref()
+            .or(config.system.model.as_ref())
+            .map_or(DEEPSEEK_V4_PRO, String::as_str),
+        args.api_key.as_deref(),
+        config.effective_max_multi_turn(),
+    );
     let agent = Arc::new(build_agent(&args, &config, tools)?);
     let (history, store, session_id, context) = init_history().await;
     let mut session = Session::new()?;

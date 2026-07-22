@@ -148,9 +148,12 @@ pub enum AgentEvent {
         internal_call_id: String,
     },
     Notice(String),
+    /// 子代理产生的事件：`depth` 为展示深度（1 = 主代理的直接子代理）。
+    /// 嵌套子代理的事件会被多层 `Child` 包裹，转换层取最内层深度。
+    Child { depth: u32, event: Box<AgentEvent> },
 }
 
-type AgentEventSender = tokio::sync::mpsc::UnboundedSender<AgentEvent>;
+pub type AgentEventSender = tokio::sync::mpsc::UnboundedSender<AgentEvent>;
 type ChatFuture = Pin<Box<dyn Future<Output = Result<ChatOutcome, TurnFailure>> + Send>>;
 type ChatFn = dyn Fn(
         String,
@@ -555,11 +558,17 @@ async fn stream_once<M: CompletionModel + 'static>(
     let mut section = AgentSection::Answer;
     let mut partial = PartialTurn::default();
     let mut final_history: Option<Vec<Message>> = None;
+    // 每次调用注入运行时扩展：事件通道与取消信号，供 agent 等
+    // 需要运行时上下文的工具经 `call_with_extensions` 取用。
+    let mut extensions = rig::tool::ToolCallExtensions::new();
+    extensions.insert(tx.clone());
+    extensions.insert(cancel_rx.clone());
     let stream_request = agent
         .stream_prompt(input)
         .history(history.to_vec())
         .max_turns(max_multi_turn as usize)
-        .tool_concurrency(constants::TOOL_CONCURRENCY);
+        .tool_concurrency(constants::TOOL_CONCURRENCY)
+        .tool_extensions(extensions);
     // 上下文管理启用时挂载 hook：每次 completion 前检查预算并按需压缩。
     let stream_request = match active_ctx {
         Some(active) => stream_request.add_hook(ContextHook {

@@ -1,6 +1,6 @@
 use crate::shared::util::parse_args_object;
 use itertools::Itertools;
-use rig::tool::{ToolDyn, ToolError};
+use rig::tool::{ToolCallExtensions, ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::{Map, Value};
 use std::fmt::Write;
@@ -35,6 +35,17 @@ impl ToolDyn for PaginatedTool {
     }
     fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
+            self.call_with_extensions(args, &ToolCallExtensions::new())
+                .await
+        })
+    }
+
+    fn call_with_extensions<'a>(
+        &'a self,
+        args: String,
+        extensions: &'a ToolCallExtensions,
+    ) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
             let mut args = parse_args_object(&args)?;
             let offset = take_usize(&mut args, OFFSET_PARAM)?;
             if offset == Some(0) {
@@ -44,7 +55,7 @@ impl ToolDyn for PaginatedTool {
             }
             let limit = take_usize(&mut args, LIMIT_PARAM)?;
             let inner_args = serde_json::to_string(&args).map_err(ToolError::JsonError)?;
-            let output = self.inner.call(inner_args).await?;
+            let output = self.inner.call_with_extensions(inner_args, extensions).await?;
             Ok(paginate_text(&output, offset, limit, self.default_limit))
         })
     }

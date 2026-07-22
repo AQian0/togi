@@ -1,5 +1,5 @@
 use crate::shared::util::parse_args_object;
-use rig::tool::{ToolDyn, ToolError};
+use rig::tool::{ToolCallExtensions, ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::{Map, Value};
 
@@ -33,12 +33,23 @@ impl ToolDyn for InjectedTool {
     }
     fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
+            self.call_with_extensions(args, &ToolCallExtensions::new())
+                .await
+        })
+    }
+
+    fn call_with_extensions<'a>(
+        &'a self,
+        args: String,
+        extensions: &'a ToolCallExtensions,
+    ) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
             let mut args = parse_args_object(&args)?;
             for (key, value) in &self.params {
                 args.insert(key.clone(), value.clone());
             }
             let args = serde_json::to_string(&args).map_err(ToolError::JsonError)?;
-            self.inner.call(args).await
+            self.inner.call_with_extensions(args, extensions).await
         })
     }
 }
