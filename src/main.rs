@@ -1,7 +1,13 @@
 #[tokio::main]
-async fn main() -> togi::error::Result<()> {
+async fn main() {
     init_logging();
-    togi::app::run().await
+    // 致命错误走本地化的 user_message（Termination 默认只打印 Debug 结构）。
+    if let Err(err) = togi::app::run().await {
+        use togi::error::TogiError;
+        tracing::error!(code = err.code(), error = %err, "fatal error");
+        eprintln!("{}", err.user_message());
+        std::process::exit(1);
+    }
 }
 
 /// 调试日志写文件（TUI 占用终端，不能写 stderr）。
