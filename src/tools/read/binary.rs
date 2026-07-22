@@ -52,11 +52,6 @@ pub(super) fn render_hexdump(data: &[u8], max_bytes: usize, base_offset: u64) ->
     out
 }
 
-#[must_use]
-pub(super) fn render_base64(data: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(data)
-}
 
 pub(super) struct BinaryReadRequest<'a> {
     pub(super) path: &'a Path,
@@ -125,7 +120,8 @@ pub(super) async fn read_binary(request: BinaryReadRequest<'_>) -> Result<String
                     .await
                     .map_err(|source| Read::map_io(source, display.to_string()))?
             };
-            let b64 = render_base64(&data);
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
             let warning = if limit < remaining_bytes {
                 format!(
                     "\n{}",
@@ -197,7 +193,8 @@ mod tests {
 
     #[test]
     fn base64_encodes() {
-        let out = render_base64(b"hello");
+        use base64::Engine;
+        let out = base64::engine::general_purpose::STANDARD.encode(b"hello");
         assert_eq!(out, "aGVsbG8=");
     }
 }

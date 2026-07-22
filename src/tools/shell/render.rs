@@ -1,4 +1,4 @@
-use super::capture::{StreamCapture, StreamChunk};
+use super::capture::StreamCapture;
 use super::process;
 use crate::shared::constants;
 use crate::shared::util::format_size;
@@ -55,73 +55,6 @@ pub(super) fn render_separated(
                 "shell-output-truncated",
                 shown = format_size(stored_output_len as u64),
                 total = format_size(total_output_len as u64)
-            ),
-        );
-    }
-
-    out.truncate(out.trim_end_matches('\n').len());
-    out
-}
-
-pub(super) fn render_interleaved(
-    status: ExitStatus,
-    chunks: &[StreamChunk],
-    total_bytes: usize,
-    stored_bytes: usize,
-    cwd: &Path,
-) -> String {
-    let code = process::exit_description(status);
-    let mut out = String::with_capacity(
-        (stored_bytes.min(constants::SHELL_MAX_OUTPUT_BYTES + 512)) + (chunks.len() * 8) + 256,
-    );
-
-    write!(
-        out,
-        "{}\n{}\n",
-        crate::t!("shell-cwd-line", cwd = cwd.display().to_string()),
-        crate::t!("shell-exit-code-line", code = code)
-    )
-    .unwrap();
-
-    if chunks.is_empty() {
-        out.push_str(&crate::t!("conv-empty-output"));
-        return out;
-    }
-
-    let truncated = total_bytes > stored_bytes;
-
-    let mut last_source: Option<bool> = None;
-    for (is_stdout, data) in chunks {
-        let display_text = String::from_utf8_lossy(data);
-        if display_text.is_empty() {
-            continue;
-        }
-
-        if last_source == Some(*is_stdout) {
-            out.push_str(&display_text);
-        } else {
-            if !out.ends_with('\n') {
-                out.push('\n');
-            }
-            let header = if *is_stdout {
-                constants::STDOUT_SECTION_HEADER
-            } else {
-                constants::STDERR_SECTION_HEADER
-            };
-            out.push_str(header);
-            out.push_str(&display_text);
-            last_source = Some(*is_stdout);
-        }
-    }
-
-    if truncated {
-        let _ = write!(
-            out,
-            "\n{}",
-            crate::t!(
-                "shell-output-truncated",
-                shown = format_size(stored_bytes as u64),
-                total = format_size(total_bytes as u64)
             ),
         );
     }

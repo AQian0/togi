@@ -117,9 +117,6 @@ pub(crate) const SHELL_MAX_OUTPUT_BYTES: usize = 256 * 1024;
 /// Shell 读取缓冲区大小（字节）。
 pub(crate) const SHELL_READ_BUFFER_SIZE: usize = 4096;
 
-/// 交错模式 channel 容量。
-pub(crate) const INTERLEAVED_CHANNEL_CAPACITY: usize = 64;
-
 // ── 文件 IO ───────────────────────────────────────────────────────
 
 /// 二进制检测采样大小（字节）。

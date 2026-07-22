@@ -139,7 +139,7 @@ pub(super) async fn write_text_file(
 
     let encoding = requested_encoding.unwrap_or(encoding_rs::UTF_8);
     let data = encode_text(content, encoding, &[])?;
-    let warning = super::atomic::write_bytes::<ModifyError>(
+    let warning = super::atomic::write_bytes(
         path,
         display,
         &data,
@@ -241,7 +241,7 @@ pub(super) async fn write_binary_file(
         ));
     }
 
-    let warning = super::atomic::write_bytes::<ModifyError>(
+    let warning = super::atomic::write_bytes(
         path,
         display,
         data,

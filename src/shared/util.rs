@@ -25,26 +25,6 @@ pub(crate) fn format_size(bytes: u64) -> String {
     }
 }
 
-/// IO 错误分类，供各工具的 `map_io` 复用。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IoErrorClass {
-    NotFound,
-    PermissionDenied,
-    NotUtf8,
-    Other,
-}
-
-/// 将 `std::io::Error` 归类为统一的错误类别。
-#[must_use]
-pub(crate) fn classify_io_error(source: &std::io::Error) -> IoErrorClass {
-    match source.kind() {
-        ErrorKind::NotFound => IoErrorClass::NotFound,
-        ErrorKind::PermissionDenied => IoErrorClass::PermissionDenied,
-        ErrorKind::InvalidData => IoErrorClass::NotUtf8,
-        _ => IoErrorClass::Other,
-    }
-}
-
 /// 工具路径解析错误。
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ToolPathError {
@@ -133,20 +113,6 @@ pub(crate) fn check_file_size(path: &str, size: u64) -> Result<(), FileTooLargeE
     Ok(())
 }
 
-/// 统一的截断提示。
-#[must_use]
-pub(crate) fn truncation_notice(shown: u64, total: u64, unit: &str) -> String {
-    format!(
-        "\n{}",
-        crate::t!(
-            "common-truncation-notice",
-            shown = format_size(shown),
-            total = format_size(total),
-            unit = unit
-        )
-    )
-}
-
 /// 流式读取指定编码的文本文件片段。
 pub(crate) async fn streaming_read_text_with_encoding(
     path: &Path,
@@ -173,24 +139,14 @@ pub(crate) async fn streaming_read_text_with_encoding(
     let was_truncated = (offset_bytes + n as u64) < file_size;
 
     if std::ptr::eq(encoding, encoding_rs::UTF_8) {
-        // UTF-8 边界对齐：如果缓冲区末尾切断了多字节字符，向后退
-        let valid_len = if n > 0 {
-            let mut end = n;
-            while end > 0 && std::str::from_utf8(&buf[..end]).is_err() {
-                end -= 1;
-            }
-            end
-        } else {
-            0
+        // UTF-8 边界对齐：末尾切断多字节字符时退到最长有效前缀。
+        let valid_len = match std::str::from_utf8(&buf) {
+            Ok(_) => n,
+            Err(e) => e.valid_up_to(),
         };
-
-        let text = if valid_len > 0 {
-            buf.truncate(valid_len);
-            String::from_utf8(buf).map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?
-        } else {
-            String::new()
-        };
-
+        buf.truncate(valid_len);
+        let text =
+            String::from_utf8(buf).map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
         return Ok((text, file_size, was_truncated));
     }
 

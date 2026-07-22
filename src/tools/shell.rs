@@ -32,12 +32,6 @@ impl crate::tools::ClassifyEffect for Shell {
     }
 }
 
-impl Shell {
-    fn resolve_cwd(cwd: Option<&Path>) -> Result<PathBuf, ShellError> {
-        cwd.map(Path::to_path_buf).ok_or(ShellError::MissingCwd)
-    }
-}
-
 /// 判断一条 shell 命令是否为"纯查询"（只读）命令。
 ///
 /// 仅用于决定结果在对话区的展示方式（隐藏冗长输出），不影响命令执行；
@@ -123,10 +117,6 @@ pub struct ShellArgs {
     #[serde(default)]
     #[schemars(skip)]
     env: Option<HashMap<String, String>>,
-    /// When true, stdout and stderr are interleaved in arrival order with
-    /// source labels, like a real terminal. Default false (separated sections).
-    #[serde(default)]
-    interleave: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -247,7 +237,7 @@ impl Tool for Shell {
         if command.is_empty() {
             return Err(ShellError::EmptyCommand);
         }
-        let cwd = Self::resolve_cwd(args.cwd.as_deref())?;
+        let cwd = args.cwd.as_deref().map(Path::to_path_buf).ok_or(ShellError::MissingCwd)?;
         if !cwd.is_dir() {
             return Err(ShellError::BadWorkingDir {
                 path: cwd.display().to_string(),
@@ -259,10 +249,6 @@ impl Tool for Shell {
             .clamp(1, constants::MAX_TIMEOUT_SECS);
         let duration = Duration::from_secs(secs);
         let env = args.env.as_ref();
-
-        if args.interleave.unwrap_or(false) {
-            return runner::run_interleaved(command, &cwd, duration, env).await;
-        }
 
         runner::run_separated(command, &cwd, duration, env).await
     }

@@ -1,14 +1,14 @@
 use crate::context::ContextCheckpoint;
 use crate::shared::error::TogiError;
 use crate::store::{HistoryStore, SessionMeta};
-use crate::ui::interaction::OutputItem;
+use crate::ui::OutputItem;
 use rig::message::Message;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
 /// 帮助命令的描述列表。命令名本身不翻译（是用户输入的关键字），
 /// 仅翻译右侧描述文本。
-static HELP_ROWS: &[(&str, &str)] = &[
+pub(crate) static HELP_ROWS: &[(&str, &str)] = &[
     ("/help", "builtins-help-desc"),
     ("/clear", "builtins-clear-desc"),
     ("/history", "builtins-history-desc"),
@@ -25,7 +25,7 @@ pub async fn handle_command(
     tx: mpsc::UnboundedSender<OutputItem>,
     history: &Arc<RwLock<Arc<[Message]>>>,
     store: Option<&Arc<HistoryStore>>,
-    session_id: &Arc<RwLock<Arc<str>>>,
+    session_id: &Arc<RwLock<String>>,
     context: &Arc<RwLock<ContextCheckpoint>>,
 ) -> bool {
     // 先拆分命令和参数
@@ -149,7 +149,7 @@ pub async fn handle_command(
                             let count = report.messages.len();
                             let dropped = report.dropped_rows;
                             *history.write().await = Arc::from(report.messages);
-                            *session_id.write().await = Arc::from(target_sid.as_str());
+                            *session_id.write().await = target_sid.clone();
                             match store.load_context(&target_sid).await {
                                 Ok(checkpoint) => {
                                     // 加载截断可能使 checkpoint 越过历史末尾，作废重建。
@@ -207,7 +207,7 @@ pub async fn handle_command(
             match store.create_session(&title).await {
                 Ok(new_sid) => {
                     *history.write().await = Arc::from(Vec::new());
-                    *session_id.write().await = Arc::from(new_sid.as_str());
+                    *session_id.write().await = new_sid.clone();
                     *context.write().await = ContextCheckpoint::default();
                     send_notice(
                         &tx,
@@ -357,7 +357,6 @@ fn truncate_preview(text: &str, max: usize) -> String {
 }
 
 fn send_notice(tx: &mpsc::UnboundedSender<OutputItem>, msg: &str) {
-    if tx.send(OutputItem::Notice(msg.to_string())).is_err() {
-        // 接收端已关闭，后续 send 也会失败，直接忽略。
-    }
+    // 接收端已关闭时忽略，后续 send 也会失败。
+    let _ = tx.send(OutputItem::Notice(msg.to_string()));
 }

@@ -57,7 +57,7 @@ fn normalize_lang(raw: &str) -> Option<LanguageIdentifier> {
     if raw.is_empty() || raw == "C" || raw == "POSIX" || raw.starts_with("C.") {
         return None;
     }
-    let lang_part = raw.split('.').next().unwrap_or(raw);
+    let (lang_part, _) = raw.split_once('.').unwrap_or((raw, ""));
     let normalized = lang_part.replace('_', "-");
     normalized.parse().ok()
 }
@@ -76,11 +76,6 @@ fn detect_platform_locale() -> Option<LanguageIdentifier> {
     normalize_lang(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// 非 macOS 平台暂无原生检测，留作扩展点。
-#[cfg(not(target_os = "macos"))]
-fn detect_platform_locale() -> Option<LanguageIdentifier> {
-    None
-}
 
 /// 按优先级检测当前设备 locale。
 fn detect_locale() -> Option<LanguageIdentifier> {
@@ -97,8 +92,15 @@ fn detect_locale() -> Option<LanguageIdentifier> {
             return Some(id);
         }
     }
-    // 3. 平台原生检测
-    detect_platform_locale()
+    // 3. 平台原生检测（仅 macOS）
+    #[cfg(target_os = "macos")]
+    {
+        detect_platform_locale()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 fn lang() -> &'static LanguageIdentifier {

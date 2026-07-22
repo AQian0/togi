@@ -108,16 +108,8 @@ const NON_TEXT_CONTENT_TOKENS: u64 = 1024;
 
 /// 保守 token 估算：ASCII 约 4 字符 / token，非 ASCII 约 1 字符 / token。
 pub fn estimate_tokens(text: &str) -> u64 {
-    let mut ascii = 0u64;
-    let mut non_ascii = 0u64;
-    for ch in text.chars() {
-        if ch.is_ascii() {
-            ascii += 1;
-        } else {
-            non_ascii += 1;
-        }
-    }
-    ascii.div_ceil(4) + non_ascii
+    let ascii = text.bytes().filter(u8::is_ascii).count() as u64;
+    ascii.div_ceil(4) + text.chars().count() as u64 - ascii
 }
 
 /// 估算单条消息，包含工具参数、工具结果、reasoning 等全部序列化内容。
@@ -216,15 +208,6 @@ pub fn build_active_history(
 
 // ── 安全切分 ────────────────────────────────────────────────────────
 
-/// 切分方案。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SplitPlan {
-    /// 在 k 处切分：`history[..k]` 并入摘要，`history[k..]` 原样保留。
-    Split(usize),
-    /// 无合法切点，或最小合法保留仍超窗口预算。
-    Impossible,
-}
-
 /// user 消息是否包含 tool result。
 fn is_tool_result_message(msg: &Message) -> bool {
     matches!(msg, Message::User { content }
@@ -317,15 +300,13 @@ pub fn plan_split(
     prompt: &Message,
     policy: &ContextPolicy,
     min_covered: usize,
-) -> SplitPlan {
+) -> Option<usize> {
     let len = history.len();
     let min_k = min_covered.min(len);
     let prompt_est = estimate_message(prompt);
-    let Some(k_floor) = prompt_call_floor(history, prompt) else {
-        return SplitPlan::Impossible;
-    };
+    let k_floor = prompt_call_floor(history, prompt)?;
     if k_floor < min_k {
-        return SplitPlan::Impossible;
+        return None;
     }
     // keep_recent 预算内可保留的最大后缀起点。
     let mut cost = prompt_est;
@@ -357,15 +338,13 @@ pub fn plan_split(
             })
             .or_else(|| in_budget.first().copied())
     };
-    let Some(k) = chosen else {
-        return SplitPlan::Impossible;
-    };
+    let k = chosen?;
     // 单个不可拆片段仍超窗口（含摘要预留）→ 明确失败，不制造非法历史。
     let retained_est = estimate_history(&history[k..]) + prompt_est;
     if retained_est.saturating_add(policy.summary_max_tokens()) >= policy.trigger_tokens() {
-        return SplitPlan::Impossible;
+        return None;
     }
-    SplitPlan::Split(k)
+    Some(k)
 }
 
 // ── 压缩决策 ────────────────────────────────────────────────────────
@@ -390,7 +369,7 @@ pub fn decide(
         };
     }
     match plan_split(history, prompt, policy, checkpoint.covered_messages) {
-        SplitPlan::Split(k) if k > checkpoint.covered_messages => Decision::Compact(k),
+        Some(k) if k > checkpoint.covered_messages => Decision::Compact(k),
         // 强制压缩时仍无合法切点（或已无进展）：终止；否则按现状发送，
         // 交给 provider overflow 恢复路径处理。
         _ if force => Decision::Terminate,
@@ -436,11 +415,10 @@ pub enum SummaryError {
 
 /// 按字符数截断并附加省略标记。
 fn truncate_chars(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
+    match text.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…[truncated]", &text[..i]),
+        None => text.to_string(),
     }
-    let truncated: String = text.chars().take(max).collect();
-    format!("{truncated}…[truncated]")
 }
 
 /// 将待淘汰消息序列化为摘要输入文本。
@@ -726,12 +704,12 @@ mod tests {
         let p = policy(100_000, 1000, 90);
         let prompt = user("go");
         match plan_split(&history, &prompt, &p, 0) {
-            SplitPlan::Split(k) => {
+            Some(k) => {
                 // 预算内的合法切点中保留最多：user 边界（index 4）
                 assert_eq!(k, 4, "should cut before the last plain user message");
                 assert!(is_plain_user_message(&history[k]));
             }
-            SplitPlan::Impossible => panic!("expected a split"),
+            None => panic!("expected a split"),
         }
     }
 
@@ -747,11 +725,11 @@ mod tests {
         let p = policy(100_000, 1000, 40);
         let prompt = user("继续");
         match plan_split(&history, &prompt, &p, 0) {
-            SplitPlan::Split(k) => {
+            Some(k) => {
                 assert!(!is_tool_result_message(&history[k]));
                 assert_eq!(k, 3, "must skip past the tool result message");
             }
-            SplitPlan::Impossible => panic!("expected a split"),
+            None => panic!("expected a split"),
         }
     }
 
@@ -765,7 +743,7 @@ mod tests {
         ];
         let p = policy(100_000, 1000, 30);
         let prompt = user("好");
-        let SplitPlan::Split(k) = plan_split(&history, &prompt, &p, 0) else {
+        let Some(k) = plan_split(&history, &prompt, &p, 0) else {
             panic!("expected a split");
         };
         // 不能切在批量 result 处（孤立 result），只能保留最后的 assistant
@@ -778,7 +756,7 @@ mod tests {
         let p = policy(100_000, 1000, 20);
         let prompt = tool_result_msg("c1", "done");
         // keep 预算只够 prompt 本身，但 call 必须保留 → k = 1
-        let SplitPlan::Split(k) = plan_split(&history, &prompt, &p, 0) else {
+        let Some(k) = plan_split(&history, &prompt, &p, 0) else {
             panic!("expected a split");
         };
         assert_eq!(k, 1, "cut must keep the assistant message with the call");
@@ -795,7 +773,7 @@ mod tests {
         ];
         let p = policy(100_000, 1000, 120);
         let prompt = user("继续");
-        let SplitPlan::Split(k) = plan_split(&history, &prompt, &p, 0) else {
+        let Some(k) = plan_split(&history, &prompt, &p, 0) else {
             panic!("expected a split");
         };
         assert!(matches!(&history[k], Message::Assistant { .. }));
@@ -807,7 +785,7 @@ mod tests {
         let history = vec![user("hi"), assistant("hello")];
         let p = policy(100_000, 1000, 20);
         let prompt = tool_result_msg("missing", "done");
-        assert_eq!(plan_split(&history, &prompt, &p, 0), SplitPlan::Impossible);
+        assert_eq!(plan_split(&history, &prompt, &p, 0), None);
     }
 
     #[test]
@@ -816,7 +794,7 @@ mod tests {
         let history = vec![user(&"u".repeat(500))];
         let p = policy(250, 100, 50);
         let prompt = user(&"p".repeat(500));
-        assert_eq!(plan_split(&history, &prompt, &p, 0), SplitPlan::Impossible);
+        assert_eq!(plan_split(&history, &prompt, &p, 0), None);
     }
 
     #[test]
@@ -830,7 +808,7 @@ mod tests {
         let p = policy(100_000, 1000, 250);
         let prompt = user("go");
         // min_covered = 2：即使预算允许保留更多，也只能从 2 之后切
-        let SplitPlan::Split(k) = plan_split(&history, &prompt, &p, 2) else {
+        let Some(k) = plan_split(&history, &prompt, &p, 2) else {
             panic!("expected a split");
         };
         assert!(k >= 2);

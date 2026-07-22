@@ -1,7 +1,7 @@
 use crate::shared::error::{ErrorKind, TogiError};
 use crate::shared::text_encoding::{TextEncodingError, encoding_from_label};
 use crate::shared::util::{
-    FileTooLargeError, IoErrorClass, ToolPathError, classify_io_error, resolve_tool_path,
+    FileTooLargeError, ToolPathError, resolve_tool_path,
 };
 use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
@@ -13,7 +13,6 @@ mod atomic;
 pub mod edit;
 mod write;
 
-use edit::Replacement;
 
 #[derive(Deserialize, JsonSchema)]
 struct EditInstruction {
@@ -143,12 +142,6 @@ pub enum ModifyError {
         #[source]
         source: std::io::Error,
     },
-}
-
-impl atomic::AtomicWriteFailure for ModifyError {
-    fn from_atomic_io(source: std::io::Error, display: &str) -> Self {
-        Modify::map_io(source, display)
-    }
 }
 
 impl TogiError for ModifyError {
@@ -301,11 +294,11 @@ impl Modify {
 
     pub(super) fn map_io(source: std::io::Error, display: &str) -> ModifyError {
         let path = display.to_string();
-        match classify_io_error(&source) {
-            IoErrorClass::NotFound => ModifyError::NotFound { path },
-            IoErrorClass::PermissionDenied => ModifyError::PermissionDenied { path },
-            IoErrorClass::NotUtf8 => ModifyError::NotUtf8 { path },
-            IoErrorClass::Other => ModifyError::Io { path, source },
+        match source.kind() {
+            std::io::ErrorKind::NotFound => ModifyError::NotFound { path },
+            std::io::ErrorKind::PermissionDenied => ModifyError::PermissionDenied { path },
+            std::io::ErrorKind::InvalidData => ModifyError::NotUtf8 { path },
+            _ => ModifyError::Io { path, source },
         }
     }
 }
@@ -408,20 +401,20 @@ impl Tool for Modify {
             return write::write_text_file(&path, &display, content, dry_run, text_encoding).await;
         }
 
-        let mut replacements: Vec<Replacement<'_>> = Vec::new();
+        let mut replacements: Vec<(String, String)> = Vec::new();
         if let Some(edits) = args.edits.as_deref() {
             for edit in edits {
-                replacements.push(Replacement {
-                    old: edit.old_text.as_str(),
-                    new: edit.new_text.as_deref().unwrap_or(""),
-                });
+                replacements.push((
+                    edit.old_text.clone(),
+                    edit.new_text.clone().unwrap_or_default(),
+                ));
             }
         }
         if let Some(old_text) = args.old_text.as_deref() {
-            replacements.push(Replacement {
-                old: old_text,
-                new: args.new_text.as_deref().unwrap_or(""),
-            });
+            replacements.push((
+                old_text.to_string(),
+                args.new_text.clone().unwrap_or_default(),
+            ));
         }
         if replacements.is_empty() {
             return Err(ModifyError::NoInstructions);

@@ -26,8 +26,3 @@ fn cli_long_about() -> String {
     crate::t!("cli-long-about")
 }
 
-impl Args {
-    pub fn parse() -> Self {
-        <Self as Parser>::parse()
-    }
-}

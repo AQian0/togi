@@ -2,7 +2,6 @@
 //!
 //! 原模块中的终端打印函数（banner, section_header 等）已迁移至 interaction.rs
 //! 的 ratatui 全屏渲染管线，本模块仅保留纯数据变换辅助。
-use itertools::Itertools;
 use serde_json::Value;
 pub fn summarize_call(name: &str, value: &Value) -> String {
     match name {
@@ -20,7 +19,7 @@ pub fn summarize_call(name: &str, value: &Value) -> String {
         _ => summarize_generic(value),
     }
 }
-pub fn summarize_modify(value: &Value) -> String {
+fn summarize_modify(value: &Value) -> String {
     let path = value
         .get("path")
         .and_then(Value::as_str)
@@ -44,7 +43,7 @@ pub fn summarize_modify(value: &Value) -> String {
         format!("{path} · {action}")
     }
 }
-pub fn summarize_generic(value: &Value) -> String {
+fn summarize_generic(value: &Value) -> String {
     let Some(obj) = value.as_object() else {
         return String::new();
     };
@@ -80,7 +79,7 @@ pub fn summarize_readonly_result(text: &str) -> String {
 
 pub fn truncate_inline(text: &str) -> String {
     let max = crate::shared::constants::SUMMARY_MAX_INLINE_CHARS;
-    let collapsed: String = text.split_whitespace().join(" ");
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out: String = collapsed.chars().take(max).collect();
     if collapsed.chars().count() > max {
         out.push('…');

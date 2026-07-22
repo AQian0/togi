@@ -7,9 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
 use syntect::highlighting::{FontStyle, Theme};
 
-pub fn c() -> &'static theme::CatppuccinColors {
-    theme::c()
-}
+pub(crate) use super::theme::c;
 
 pub fn app_background() -> Style {
     Style::default().bg(c().crust).fg(c().text)

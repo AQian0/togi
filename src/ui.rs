@@ -1,6 +1,6 @@
 //! 终端 UI 子系统：对话渲染、工具调用摘要。
 //!
-//! - [`interaction`]：基于 ratatui 的全屏对话 UI（Session / 流式渲染）。
+//! - [`session`]：基于 ratatui 的全屏对话 UI（Session / 流式渲染）。
 //! - [`session`]：Session 生命周期、事件循环、输入输出、帧渲染。
 //! - [`keys`]：按键分发与退出命令识别。
 //! - [`terminal`]：终端模式管理与事件轮询。
@@ -98,7 +98,6 @@ pub(crate) mod complete;
 pub(crate) mod conversation;
 pub(crate) mod editor;
 pub(crate) mod history;
-pub(crate) mod interaction;
 pub(crate) mod keys;
 pub(crate) mod markdown;
 pub(crate) mod render;

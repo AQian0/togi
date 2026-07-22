@@ -4,8 +4,6 @@
 //! 代码块通过 syntect 做语法高亮。
 use crate::ui::style;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-#[cfg(test)]
-use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 fn render_code_block(lang: &str, raw_lines: &[String]) -> Vec<Line<'static>> {
@@ -288,6 +286,7 @@ fn flush_block(spans: &mut Vec<Span<'static>>, lines: &mut Vec<Line<'static>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Modifier;
     #[test]
     fn empty_text_returns_empty() {
         assert!(render_markdown("").is_empty());

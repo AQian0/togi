@@ -23,7 +23,6 @@ pub enum ErrorKind {
     NotUtf8,
     Io,
     External,
-    Cancelled,
     Internal,
 }
 
@@ -89,11 +88,6 @@ pub enum AppError {
         source: std::io::Error,
     },
 
-    #[error("cancelled")]
-    Cancelled,
-
-    #[error("internal error: {0}")]
-    Internal(String),
 }
 
 impl TogiError for AppError {
@@ -106,8 +100,6 @@ impl TogiError for AppError {
             Self::DefaultModelInit { .. } => "app.default_model_init",
             Self::TaskJoin(_) => "app.task_join",
             Self::Io { .. } => "app.io",
-            Self::Cancelled => "app.cancelled",
-            Self::Internal(_) => "app.internal",
         }
     }
 
@@ -120,8 +112,6 @@ impl TogiError for AppError {
             Self::DefaultModelInit { .. } => ErrorKind::External,
             Self::TaskJoin(_) => ErrorKind::Internal,
             Self::Io { .. } => ErrorKind::Io,
-            Self::Cancelled => ErrorKind::Cancelled,
-            Self::Internal(_) => ErrorKind::Internal,
         }
     }
 
@@ -134,7 +124,7 @@ impl TogiError for AppError {
             Self::DefaultModelInit { source } => {
                 crate::t!("error-default-model-init", source = source.to_string())
             }
-            Self::TaskJoin(_) | Self::Internal(_) => self.to_string(),
+            Self::TaskJoin(_) => self.to_string(),
             Self::Io { context, source } => {
                 crate::t!(
                     "app-io-error",
@@ -142,7 +132,6 @@ impl TogiError for AppError {
                     error = source.to_string()
                 )
             }
-            Self::Cancelled => crate::t!("app-cancelled"),
         }
     }
 }
@@ -150,22 +139,6 @@ impl TogiError for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cancelled_error_has_stable_code_and_kind() {
-        let err = AppError::Cancelled;
-        assert_eq!(err.code(), "app.cancelled");
-        assert_eq!(err.kind(), ErrorKind::Cancelled);
-        assert!(!err.retryable());
-    }
-
-    #[test]
-    fn internal_error_has_stable_code_and_kind() {
-        let err = AppError::Internal("something broke".to_string());
-        assert_eq!(err.code(), "app.internal");
-        assert_eq!(err.kind(), ErrorKind::Internal);
-        assert!(!err.retryable());
-    }
 
     #[test]
     fn io_error_carries_context() {

@@ -181,18 +181,16 @@ pub(crate) fn build_display_lines(
                         spans.push(block_gutter_span(bs));
                     }
                     let block_bg = block.and_then(|bs| bs.bg);
-                    if *align == Align::Right {
-                        let target =
-                            (conv_width as usize).saturating_sub(constants::USER_EDGE_MARGIN);
-                        let pad = target.saturating_sub(dw);
-                        if pad > 0 {
-                            let pad_style = if let Some(bg) = block_bg {
-                                Style::default().bg(bg)
-                            } else {
-                                Style::default()
-                            };
-                            spans.push(Span::styled(" ".repeat(pad), pad_style));
-                        }
+                    let target =
+                        (conv_width as usize).saturating_sub(constants::USER_EDGE_MARGIN);
+                    let pad = target.saturating_sub(dw);
+                    if pad > 0 {
+                        let pad_style = if let Some(bg) = block_bg {
+                            Style::default().bg(bg)
+                        } else {
+                            Style::default()
+                        };
+                        spans.push(Span::styled(" ".repeat(pad), pad_style));
                     }
                     spans.extend(rline.spans.iter().map(|s| {
                         Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
@@ -218,9 +216,7 @@ pub(crate) fn build_display_lines(
                 spans.extend(wline.spans.iter().map(|s| {
                     Span::styled(s.content.clone(), with_block_background(s.style, block_bg))
                 }));
-                if *align == Align::Left
-                    && let Some(bg_color) = block_bg
-                {
+                if let Some(bg_color) = block_bg {
                     let full_width = conv_width as usize;
                     let current_w: usize = spans_display_width(&spans);
                     if current_w < full_width {

@@ -12,7 +12,8 @@ use crate::tools::read::Read;
 use crate::tools::shell::Shell;
 use crate::tools::{ToolEffect, ToolRegistry};
 use crate::ui::ErrorInfo;
-use crate::ui::interaction::{OutputItem, Session};
+use crate::ui::session::Session;
+use crate::ui::OutputItem;
 use crate::ui::theme::CatppuccinFlavor;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;
@@ -26,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 type History = Arc<RwLock<Arc<[Message]>>>;
 type UiSender = mpsc::UnboundedSender<OutputItem>;
-type SessionId = Arc<RwLock<Arc<str>>>;
+type SessionId = Arc<RwLock<String>>;
 
 #[derive(Clone)]
 struct AppController {
@@ -43,32 +44,6 @@ struct AppController {
 }
 
 impl AppController {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        agent: Arc<DynamicAgent>,
-        history: History,
-        store: Option<Arc<HistoryStore>>,
-        session_id: SessionId,
-        context: Arc<RwLock<ContextCheckpoint>>,
-        context_policy: Option<ContextPolicy>,
-        registry: Arc<ToolRegistry>,
-        cancel_tx: watch::Sender<bool>,
-        task_cancel: CancellationToken,
-    ) -> Self {
-        Self {
-            agent,
-            history,
-            store,
-            session_id,
-            context,
-            context_policy,
-            registry,
-            cancel_tx,
-            task_cancel,
-            submitting: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
     fn spawn_submission(&self, message: String, tx: UiSender) {
         // 防御深度：UI 层已用 Session::submitting 串行化提交，此处兜底——
         // 防止未来绕过 UI 的调用路径导致两个 handle_submission 并发竞争
@@ -245,15 +220,10 @@ fn apply_theme(args: &Args, config: &crate::config::Config) -> crate::shared::er
     Ok(())
 }
 
-async fn preload_highlighting() {
-    // 在后台线程预加载语法数据，避免首次 Markdown 渲染时卡顿。
-    // 使用 spawn_blocking 确保在当前 tokio runtime 的阻塞线程池中执行，
-    // 并 await 等待完成，保证首次渲染前数据已就绪。
-    let _ = tokio::task::spawn_blocking(|| {
-        let _ = crate::ui::style::syntax_set();
-        let _ = crate::ui::style::highlight_theme();
-    })
-    .await;
+/// 启动时预加载语法数据，避免首次 Markdown 渲染时卡顿。
+fn preload_highlighting() {
+    let _ = crate::ui::style::syntax_set();
+    let _ = crate::ui::style::highlight_theme();
 }
 
 fn build_tools(
@@ -332,15 +302,11 @@ async fn init_history() -> (
     Arc<RwLock<ContextCheckpoint>>,
 ) {
     let session_id: SessionId =
-        Arc::new(RwLock::new(Arc::from(crate::store::default_session_id())));
+        Arc::new(RwLock::new(constants::DEFAULT_SESSION_ID.to_string()));
+    let empty_history = || Arc::new(RwLock::new(Arc::from(Vec::new())));
     let empty_context = || Arc::new(RwLock::new(ContextCheckpoint::default()));
     let Some(db_path) = crate::store::default_db_path() else {
-        return (
-            Arc::new(RwLock::new(Arc::from(Vec::new()))),
-            None,
-            session_id,
-            empty_context(),
-        );
+        return (empty_history(), None, session_id, empty_context());
     };
     match HistoryStore::open(&db_path).await {
         Ok(store) => {
@@ -391,22 +357,17 @@ async fn init_history() -> (
                     error = err.user_message()
                 )
             );
-            (
-                Arc::new(RwLock::new(Arc::from(Vec::new()))),
-                None,
-                session_id,
-                empty_context(),
-            )
+            (empty_history(), None, session_id, empty_context())
         }
     }
 }
 
 pub async fn run() -> crate::shared::error::Result<()> {
-    let args = Args::parse();
+    let args = <Args as clap::Parser>::parse();
     let config = crate::config::Config::load()?;
     let context_policy = config.effective_context_policy()?;
     apply_theme(&args, &config)?;
-    preload_highlighting().await;
+    preload_highlighting();
 
     let cwd = std::env::current_dir().map_err(|source| crate::shared::error::AppError::Io {
         context: crate::t!("app-context-get-cwd"),
@@ -428,17 +389,18 @@ pub async fn run() -> crate::shared::error::Result<()> {
     let mut session = Session::new()?;
 
     let global_cancel = CancellationToken::new();
-    let controller = AppController::new(
+    let controller = AppController {
         agent,
         history,
         store,
         session_id,
         context,
         context_policy,
-        Arc::new(registry),
-        session.cancel_sender(),
-        global_cancel.clone(),
-    );
+        registry: Arc::new(registry),
+        cancel_tx: session.cancel_sender(),
+        task_cancel: global_cancel.clone(),
+        submitting: Arc::new(AtomicBool::new(false)),
+    };
     let session_cancel = global_cancel.clone();
 
     let session_task = tokio::spawn(async move {
@@ -451,22 +413,22 @@ pub async fn run() -> crate::shared::error::Result<()> {
             )
             .await;
         if let Err(e) = result {
-            tracing::error!(error = %crate::shared::error::TogiError::user_message(&e), "session error");
+            tracing::error!(error = %e.user_message(), "session error");
             eprintln!(
                 "{}",
                 crate::t!(
                     "app-session-error",
-                    error = crate::shared::error::TogiError::user_message(&e)
+                    error = e.user_message()
                 )
             );
         }
         if let Err(e) = session.save_history() {
-            tracing::error!(error = %crate::shared::error::TogiError::user_message(&e), "history save failed");
+            tracing::error!(error = %e.user_message(), "history save failed");
             eprintln!(
                 "{}",
                 crate::t!(
                     "app-history-save-error",
-                    error = crate::shared::error::TogiError::user_message(&e)
+                    error = e.user_message()
                 )
             );
         }

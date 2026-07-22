@@ -2,7 +2,7 @@ use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
 use crate::shared::text_encoding::{decode_text, encoding_from_label, is_binary_output_encoding};
 use crate::shared::util::{
-    FileTooLargeError, IoErrorClass, ToolPathError, classify_io_error, is_binary, resolve_tool_path,
+    FileTooLargeError, ToolPathError, is_binary, resolve_tool_path,
 };
 use rig::tool::{Tool, ToolFailure};
 use schemars::JsonSchema;
@@ -36,10 +36,10 @@ impl Read {
     }
 
     pub(super) fn map_io(source: std::io::Error, path: String) -> ReadError {
-        match classify_io_error(&source) {
-            IoErrorClass::NotFound => ReadError::NotFound { path },
-            IoErrorClass::PermissionDenied => ReadError::PermissionDenied { path },
-            IoErrorClass::NotUtf8 | IoErrorClass::Other => ReadError::Io { path, source },
+        match source.kind() {
+            std::io::ErrorKind::NotFound => ReadError::NotFound { path },
+            std::io::ErrorKind::PermissionDenied => ReadError::PermissionDenied { path },
+            _ => ReadError::Io { path, source },
         }
     }
 }

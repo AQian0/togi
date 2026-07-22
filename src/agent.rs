@@ -319,15 +319,6 @@ impl TransientKind {
     }
 }
 
-/// 一次失败的重试决策。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RetryDecision {
-    /// 放弃：永久性错误、已发生工具副作用、或已用完尝试次数。
-    Abort,
-    /// 延迟后重试。
-    Retry { delay: Duration },
-}
-
 /// 普通瞬态错误（5xx / 传输失败）的首次退避时长。
 const BACKOFF_BASE: Duration = Duration::from_secs(1);
 
@@ -367,16 +358,11 @@ fn jittered(delay: Duration) -> Duration {
 ///
 /// ponytail: 见过工具调用后不重试原输入——那需要 rig 暴露请求边界以续传；
 /// 目前靠部分历史落盘 + 用户继续对话来兜底。
-fn retry_decision(err: &AgentError, saw_tool_call: bool, attempt: u32) -> RetryDecision {
+fn retry_delay(err: &AgentError, saw_tool_call: bool, attempt: u32) -> Option<Duration> {
     if attempt >= MAX_ATTEMPTS || saw_tool_call {
-        return RetryDecision::Abort;
+        return None;
     }
-    match TransientKind::classify(err) {
-        Some(kind) => RetryDecision::Retry {
-            delay: backoff_delay(kind, attempt),
-        },
-        None => RetryDecision::Abort,
-    }
+    TransientKind::classify(err).map(|kind| backoff_delay(kind, attempt))
 }
 
 fn cancel_return(
@@ -497,8 +483,7 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
                 }
                 let mut failure = failure;
                 failure.context = current_checkpoint(&active, &context.checkpoint).await;
-                let RetryDecision::Retry { delay } =
-                    retry_decision(&failure.source, failure.saw_tool_call, attempt)
+                let Some(delay) = retry_delay(&failure.source, failure.saw_tool_call, attempt)
                 else {
                     tracing::debug!(attempt, error = %failure.source, "giving up: not retryable");
                     return Err(failure);
@@ -864,9 +849,8 @@ impl DynamicAgent {
 macro_rules! providers {
     (
         $(
-            $variant:ident : $mod:ident,
+            $variant:ident,
             client = $client:ty,
-            model  = $model:ty,
             env    = $env:expr,
             prefixes = [$($prefix:expr),* $(,)?]
         ),* $(,)?
@@ -959,44 +943,36 @@ macro_rules! providers {
     };
 }
 providers! {
-    DeepSeek   : deepseek,
+    DeepSeek,
         client = rig::providers::deepseek::Client,
-        model  = rig::providers::deepseek::CompletionModel,
         env    = "DEEPSEEK_API_KEY",
         prefixes = ["deepseek-"],
-    OpenAI     : openai,
+    OpenAI,
         client = rig::providers::openai::CompletionsClient,
-        model  = rig::providers::openai::completion::CompletionModel,
         env    = "OPENAI_API_KEY",
         prefixes = ["gpt-", "o1", "o3", "o4"],
-    Anthropic  : anthropic,
+    Anthropic,
         client = rig::providers::anthropic::Client,
-        model  = rig::providers::anthropic::completion::CompletionModel,
         env    = "ANTHROPIC_API_KEY",
         prefixes = ["claude-"],
-    Gemini     : gemini,
+    Gemini,
         client = rig::providers::gemini::Client,
-        model  = rig::providers::gemini::completion::CompletionModel,
         env    = "GEMINI_API_KEY",
         prefixes = ["gemini-"],
-    Xai        : xai,
+    Xai,
         client = rig::providers::xai::Client,
-        model  = rig::providers::xai::completion::CompletionModel,
         env    = "XAI_API_KEY",
         prefixes = ["grok-"],
-    Mistral    : mistral,
+    Mistral,
         client = rig::providers::mistral::Client,
-        model  = rig::providers::mistral::completion::CompletionModel,
         env    = "MISTRAL_API_KEY",
         prefixes = ["mistral-", "ministral-", "codestral-", "pixtral-"],
-    Cohere     : cohere,
+    Cohere,
         client = rig::providers::cohere::Client,
-        model  = rig::providers::cohere::completion::CompletionModel,
         env    = "COHERE_API_KEY",
         prefixes = ["command-"],
-    Perplexity : perplexity,
+    Perplexity,
         client = rig::providers::perplexity::Client,
-        model  = rig::providers::perplexity::CompletionModel,
         env    = "PERPLEXITY_API_KEY",
         prefixes = ["sonar"],
 }
@@ -1234,25 +1210,19 @@ mod tests {
     #[test]
     fn retry_aborts_after_tool_call_seen() {
         let err = stream_err(http::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(retry_decision(&err, true, 1), RetryDecision::Abort);
+        assert_eq!(retry_delay(&err, true, 1), None);
     }
 
     #[test]
     fn retry_allowed_before_any_tool_call() {
         let err = stream_err(http::StatusCode::SERVICE_UNAVAILABLE);
-        assert!(matches!(
-            retry_decision(&err, false, 1),
-            RetryDecision::Retry { .. }
-        ));
+        assert!(retry_delay(&err, false, 1).is_some());
     }
 
     #[test]
     fn retry_aborts_when_attempts_exhausted() {
         let err = stream_err(http::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            retry_decision(&err, false, MAX_ATTEMPTS),
-            RetryDecision::Abort
-        );
+        assert_eq!(retry_delay(&err, false, MAX_ATTEMPTS), None);
     }
 
     #[test]

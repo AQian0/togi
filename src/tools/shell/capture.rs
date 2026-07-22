@@ -1,8 +1,5 @@
 use crate::shared::constants;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::mpsc;
-
-pub(super) type StreamChunk = (bool, Vec<u8>);
 
 pub(super) struct StreamCapture {
     pub(super) data: Vec<u8>,
@@ -31,23 +28,4 @@ where
         }
     }
     StreamCapture { data, total }
-}
-
-pub(super) async fn forward_chunks<R>(reader: R, is_stdout: bool, tx: mpsc::Sender<StreamChunk>)
-where
-    R: AsyncRead + Unpin,
-{
-    let mut reader = tokio::io::BufReader::new(reader);
-    let mut buf = [0u8; constants::SHELL_READ_BUFFER_SIZE];
-    loop {
-        match reader.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(n) => {
-                if tx.send((is_stdout, buf[..n].to_vec())).await.is_err() {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
 }

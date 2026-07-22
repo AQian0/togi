@@ -22,7 +22,8 @@ use tokio_util::sync::CancellationToken;
 
 pub struct Session {
     terminal: Terminal<CrosstermBackend<Stdout>>,
-    terminal_mode: TerminalModeGuard,
+    // RAII：Drop 时恢复终端模式，从不读取。
+    _terminal_mode: TerminalModeGuard,
     pub(crate) conv: Conversation,
     pub(crate) editor: Editor,
     pub(crate) history: History,
@@ -45,7 +46,7 @@ impl Session {
         let (cancel_tx, _) = watch::channel(false);
         Ok(Self {
             terminal,
-            terminal_mode,
+            _terminal_mode: terminal_mode,
             conv: Conversation::new(),
             editor: Editor::new(),
             history: History::load_default(),
@@ -65,14 +66,6 @@ impl Session {
     ///
     /// `cancel_token` 用于响应外部取消信号（如 Ctrl-C），提前退出循环。
     pub async fn run(
-        &mut self,
-        on_submit: impl FnMut(String, mpsc::UnboundedSender<OutputItem>),
-        cancel_token: CancellationToken,
-    ) -> Result<(), crate::ui::UiError> {
-        self.run_inner(on_submit, cancel_token).await
-    }
-
-    async fn run_inner(
         &mut self,
         mut on_submit: impl FnMut(String, mpsc::UnboundedSender<OutputItem>),
         cancel_token: CancellationToken,
@@ -317,11 +310,5 @@ impl Session {
         self.history
             .save()
             .map_err(|source| crate::ui::UiError::HistorySave { source })
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        self.terminal_mode.restore();
     }
 }

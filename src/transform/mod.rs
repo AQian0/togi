@@ -9,7 +9,7 @@
 
 use crate::agent::{AgentEvent, AgentSection};
 use crate::tools::{ToolEffect, ToolRegistry};
-use crate::ui::interaction::{OutputItem, SectionKind};
+use crate::ui::{OutputItem, SectionKind};
 use std::collections::HashMap;
 
 /// 将单个 [`AgentEvent`] 转换为 [`OutputItem`]。

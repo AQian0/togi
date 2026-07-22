@@ -9,7 +9,12 @@ pub const CWD_PARAM: &str = "cwd";
 pub fn inject(params: Map<String, Value>, tools: Vec<Box<dyn ToolDyn>>) -> Vec<Box<dyn ToolDyn>> {
     tools
         .into_iter()
-        .map(|tool| wrap(tool, params.clone()))
+        .map(|tool| {
+            Box::new(InjectedTool {
+                inner: tool,
+                params: params.clone(),
+            }) as Box<dyn ToolDyn>
+        })
         .collect()
 }
 
@@ -54,9 +59,6 @@ impl ToolDyn for InjectedTool {
     }
 }
 
-fn wrap(inner: Box<dyn ToolDyn>, params: Map<String, Value>) -> Box<dyn ToolDyn> {
-    Box::new(InjectedTool { inner, params })
-}
 
 fn hide_injected_params(parameters: &mut Value, params: &Map<String, Value>) {
     let Some(schema) = parameters.as_object_mut() else {

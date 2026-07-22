@@ -238,7 +238,7 @@ impl Editor {
 
     #[must_use]
     pub fn displayed_rows(&self) -> usize {
-        self.lines.len().clamp(1, constants::MAX_TEXT_ROWS)
+        self.lines.len().min(constants::MAX_TEXT_ROWS)
     }
 
     pub fn ensure_row_visible(&mut self, rows: usize) {

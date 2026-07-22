@@ -120,14 +120,12 @@ impl TogiError for StoreError {
 pub struct SessionMeta {
     pub id: String,
     pub title: String,
-    pub created_at: String,
     pub updated_at: String,
 }
 
 /// 基于 Turso 本地数据库的消息持久化实现。
 pub struct HistoryStore {
     conn: turso::Connection,
-    path: PathBuf,
 }
 
 impl HistoryStore {
@@ -174,13 +172,7 @@ impl HistoryStore {
         .await
         .map_err(|source| StoreError::Query { source })?;
 
-        Ok(Self { conn, path })
-    }
-
-    /// 返回底层数据库文件路径（用于诊断日志）。
-    #[allow(dead_code)]
-    pub fn path(&self) -> &Path {
-        &self.path
+        Ok(Self { conn })
     }
 
     /// 加载指定会话的消息历史，按插入顺序返回。
@@ -197,22 +189,19 @@ impl HistoryStore {
             )
             .await
             .map_err(|source| StoreError::Query { source })?;
-        let mut raws = Vec::new();
+        let mut messages = Vec::new();
+        let mut dropped_rows = 0;
         while let Some(row) = rows
             .next()
             .await
             .map_err(|source| StoreError::Query { source })?
         {
             let raw: String = row.get(0).map_err(|source| StoreError::Query { source })?;
-            raws.push(raw);
-        }
-        let mut messages = Vec::with_capacity(raws.len());
-        let mut dropped_rows = 0;
-        for raw in &raws {
-            match decode_message(raw) {
+            match decode_message(&raw) {
                 Some(msg) => messages.push(msg),
+                // 截断：后续行可能依赖被跳过的工具往返。
                 None => {
-                    dropped_rows = raws.len() - messages.len();
+                    dropped_rows = self.count(session_id).await.unwrap_or(messages.len()) - messages.len();
                     break;
                 }
             }
@@ -391,8 +380,8 @@ impl HistoryStore {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC",
-                turso::params_from_iter(std::iter::empty::<turso::Value>()),
+                "SELECT id, title, updated_at FROM sessions ORDER BY updated_at DESC",
+                (),
             )
             .await
             .map_err(|source| StoreError::Query { source })?;
@@ -405,8 +394,7 @@ impl HistoryStore {
             sessions.push(SessionMeta {
                 id: row.get(0).map_err(|source| StoreError::Query { source })?,
                 title: row.get(1).map_err(|source| StoreError::Query { source })?,
-                created_at: row.get(2).map_err(|source| StoreError::Query { source })?,
-                updated_at: row.get(3).map_err(|source| StoreError::Query { source })?,
+                updated_at: row.get(2).map_err(|source| StoreError::Query { source })?,
             });
         }
         Ok(sessions)
@@ -471,11 +459,6 @@ pub fn default_db_path() -> Option<PathBuf> {
     )
 }
 
-/// 生成默认会话 ID。当前实现为固定值，未来支持多会话时替换为
-/// 唯一 ID 生成逻辑。
-pub fn default_session_id() -> &'static str {
-    constants::DEFAULT_SESSION_ID
-}
 
 #[cfg(test)]
 mod tests {
@@ -795,7 +778,7 @@ mod tests {
             .conn
             .query(
                 "SELECT content FROM messages WHERE session_id = 's1'",
-                turso::params_from_iter(std::iter::empty::<turso::Value>()),
+                (),
             )
             .await
             .unwrap();

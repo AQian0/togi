@@ -1,26 +1,20 @@
+use super::{Modify, ModifyError};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
 
-pub(super) trait AtomicWriteFailure: Sized {
-    fn from_atomic_io(source: std::io::Error, display: &str) -> Self;
-}
-
-async fn atomic_write_bytes_inner<E>(
+pub(super) async fn write_bytes(
     path: &Path,
     display: &str,
     data: &[u8],
     preserve_perms: Option<std::fs::Permissions>,
     expected_mtime: Option<SystemTime>,
-) -> Result<Option<String>, E>
-where
-    E: AtomicWriteFailure,
-{
+) -> Result<Option<String>, ModifyError> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(parent) = parent {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|source| E::from_atomic_io(source, display))?;
+            .map_err(|source| Modify::map_io(source, display))?;
     }
     let dir = parent
         .map(Path::to_path_buf)
@@ -49,7 +43,7 @@ where
 
     if let Err(source) = write_result {
         let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(E::from_atomic_io(source, display));
+        return Err(Modify::map_io(source, display));
     }
 
     let mtime_warning = if let Some(expected) = expected_mtime {
@@ -64,46 +58,15 @@ where
 
     if let Err(source) = tokio::fs::rename(&tmp, path).await {
         let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(E::from_atomic_io(source, display));
+        return Err(Modify::map_io(source, display));
     }
 
     Ok(mtime_warning)
 }
 
-pub(super) async fn write_bytes<E>(
-    path: &Path,
-    display: &str,
-    data: &[u8],
-    preserve_perms: Option<std::fs::Permissions>,
-    expected_mtime: Option<SystemTime>,
-) -> Result<Option<String>, E>
-where
-    E: AtomicWriteFailure,
-{
-    atomic_write_bytes_inner(path, display, data, preserve_perms, expected_mtime).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Debug, thiserror::Error)]
-    enum TestAtomicError {
-        #[error("io error for `{display}`: {source}")]
-        Io {
-            display: String,
-            source: std::io::Error,
-        },
-    }
-
-    impl AtomicWriteFailure for TestAtomicError {
-        fn from_atomic_io(source: std::io::Error, display: &str) -> Self {
-            Self::Io {
-                display: display.to_string(),
-                source,
-            }
-        }
-    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let mut dir = std::env::temp_dir();
@@ -120,7 +83,7 @@ mod tests {
         std::fs::write(&path, "before").unwrap();
         let mtime = std::fs::metadata(&path).unwrap().modified().ok();
 
-        write_bytes::<TestAtomicError>(&path, &path.display().to_string(), b"after", None, mtime)
+        write_bytes(&path, &path.display().to_string(), b"after", None, mtime)
             .await
             .unwrap();
 
@@ -150,7 +113,7 @@ mod tests {
             let preserved = metadata.permissions();
             let mtime = metadata.modified().ok();
 
-            write_bytes::<TestAtomicError>(
+            write_bytes(
                 &path,
                 &path.display().to_string(),
                 b"DATA",
@@ -167,7 +130,7 @@ mod tests {
         #[cfg(not(unix))]
         {
             let metadata = std::fs::metadata(&path).unwrap();
-            write_bytes::<TestAtomicError>(
+            write_bytes(
                 &path,
                 &path.display().to_string(),
                 b"DATA",

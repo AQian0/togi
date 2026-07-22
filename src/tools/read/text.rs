@@ -1,5 +1,5 @@
 use super::{Read, ReadError, io};
-use crate::shared::util::{format_size, streaming_read_text_with_encoding, truncation_notice};
+use crate::shared::util::{format_size, streaming_read_text_with_encoding};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -72,10 +72,14 @@ pub(super) async fn read_streaming(
 
     let unread_bytes = file_size.saturating_sub(offset_bytes);
     let notice = if was_truncated || offset_bytes.saturating_add(limit_bytes) < file_size {
-        truncation_notice(
-            content.len() as u64,
-            unread_bytes,
-            &crate::t!("common-unit-text"),
+        format!(
+            "\n{}",
+            crate::t!(
+                "common-truncation-notice",
+                shown = format_size(content.len() as u64),
+                total = format_size(unread_bytes),
+                unit = crate::t!("common-unit-text")
+            )
         )
     } else {
         String::new()

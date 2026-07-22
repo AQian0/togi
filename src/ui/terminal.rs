@@ -32,7 +32,7 @@ impl TerminalModeGuard {
         Ok(Self { active: true })
     }
 
-    pub(crate) fn restore(&mut self) {
+    fn restore(&mut self) {
         if !self.active {
             return;
         }

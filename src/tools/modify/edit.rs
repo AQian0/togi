@@ -59,11 +59,6 @@ impl Suggestion {
     }
 }
 
-pub(super) struct Replacement<'a> {
-    pub(super) old: &'a str,
-    pub(super) new: &'a str,
-}
-
 #[must_use]
 pub(super) fn unified_diff(
     old: &str,
@@ -117,23 +112,13 @@ pub(super) async fn unified_diff_blocking(
 
 async fn apply_edits_blocking(
     content: String,
-    edits: &[Replacement<'_>],
+    edits: &[(String, String)],
     display: &str,
 ) -> Result<(String, String), ModifyError> {
-    let edits_owned: Vec<(String, String)> = edits
-        .iter()
-        .map(|edit| (edit.old.to_string(), edit.new.to_string()))
-        .collect();
+    let edits_owned = edits.to_vec();
     let display_owned = display.to_string();
     spawn_modify_blocking(display, move || {
-        let replacements: Vec<Replacement<'_>> = edits_owned
-            .iter()
-            .map(|(old, new)| Replacement {
-                old: old.as_str(),
-                new: new.as_str(),
-            })
-            .collect();
-        let updated = apply_edits(&content, &replacements, &display_owned)?;
+        let updated = apply_edits(&content, &edits_owned, &display_owned)?;
         Ok((content, updated))
     })
     .await
@@ -196,16 +181,16 @@ fn collect_match_lines(content: &str, needle: &str) -> Vec<usize> {
 
 pub(super) fn apply_edits(
     content: &str,
-    edits: &[Replacement<'_>],
+    edits: &[(String, String)],
     display: &str,
 ) -> Result<String, ModifyError> {
     let mut spans: Vec<(usize, usize, &str)> = Vec::with_capacity(edits.len());
-    for edit in edits {
-        if edit.old.is_empty() {
+    for (old, new) in edits {
+        if old.is_empty() {
             return Err(ModifyError::EmptyOldText);
         }
-        let start = content.find(edit.old).ok_or_else(|| {
-            let suggestion = find_similar(content, edit.old);
+        let start = content.find(old.as_str()).ok_or_else(|| {
+            let suggestion = find_similar(content, old);
             let mut msg = format!(
                 "`old_text` was not found in `{display}`. Make sure it matches \
                  the file content exactly, including whitespace."
@@ -220,11 +205,9 @@ pub(super) fn apply_edits(
                 suggestion,
             }
         })?;
-        if let Some(dup) = content[start + edit.old.len()..].find(edit.old) {
-            let tail = &content[start + edit.old.len() + dup + edit.old.len()..];
-            let extra = tail.matches(edit.old).count();
-            let total = 2 + extra;
-            let positions = collect_match_lines(content, edit.old);
+        if content[start + old.len()..].contains(old.as_str()) {
+            let positions = collect_match_lines(content, old);
+            let total = positions.len();
             let pos_str = positions
                 .iter()
                 .map(usize::to_string)
@@ -240,7 +223,7 @@ pub(super) fn apply_edits(
                 lines: pos_str,
             });
         }
-        spans.push((start, start + edit.old.len(), edit.new));
+        spans.push((start, start + old.len(), new.as_str()));
     }
     spans.sort_by_key(|(start, _, _)| *start);
     for (prev, next) in spans.iter().tuple_windows() {
@@ -264,7 +247,7 @@ pub(super) fn apply_edits(
 pub(super) async fn edit_file(
     path: &Path,
     display: &str,
-    edits: &[Replacement<'_>],
+    edits: &[(String, String)],
     dry_run: bool,
     requested_encoding: Option<&'static encoding_rs::Encoding>,
 ) -> Result<String, ModifyError> {
@@ -317,7 +300,7 @@ pub(super) async fn edit_file(
         == mtime_before;
 
     let updated_bytes = encode_text(&updated, decoded.encoding, decoded.bom)?;
-    let warning = super::atomic::write_bytes::<ModifyError>(
+    let warning = super::atomic::write_bytes(
         path,
         display,
         &updated_bytes,
@@ -327,7 +310,7 @@ pub(super) async fn edit_file(
     .await?;
 
     let (replacements, deletions): (Vec<_>, Vec<_>) =
-        edits.iter().partition(|edit| !edit.new.is_empty());
+        edits.iter().partition(|edit| !edit.1.is_empty());
     let mut parts: Vec<String> = Vec::new();
     if !replacements.is_empty() {
         parts.push(crate::t!("modify-replacements", count = replacements.len()));
@@ -375,10 +358,7 @@ mod tests {
 
     #[test]
     fn apply_edits_should_replace_unique_text() {
-        let edits = [Replacement {
-            old: "beta",
-            new: "BETA",
-        }];
+        let edits = [("beta".to_string(), "BETA".to_string())];
 
         let updated = apply_edits("alpha beta gamma", &edits, "test.txt").unwrap();
 
@@ -388,14 +368,8 @@ mod tests {
     #[test]
     fn apply_edits_should_apply_multiple_non_overlapping_replacements() {
         let edits = [
-            Replacement {
-                old: "alpha",
-                new: "A",
-            },
-            Replacement {
-                old: "gamma",
-                new: "G",
-            },
+            ("alpha".to_string(), "A".to_string()),
+            ("gamma".to_string(), "G".to_string()),
         ];
 
         let updated = apply_edits("alpha beta gamma", &edits, "test.txt").unwrap();
@@ -406,14 +380,8 @@ mod tests {
     #[test]
     fn apply_edits_should_reject_overlapping_matches() {
         let edits = [
-            Replacement {
-                old: "abc",
-                new: "X",
-            },
-            Replacement {
-                old: "cde",
-                new: "Y",
-            },
+            ("abc".to_string(), "X".to_string()),
+            ("cde".to_string(), "Y".to_string()),
         ];
 
         let result = apply_edits("abcdef", &edits, "test.txt");
@@ -423,10 +391,7 @@ mod tests {
 
     #[test]
     fn apply_edits_should_reject_non_unique_old_text() {
-        let edits = [Replacement {
-            old: "dup",
-            new: "",
-        }];
+        let edits = [("dup".to_string(), "".to_string())];
 
         let result = apply_edits("dup dup", &edits, "test.txt");
 
@@ -435,10 +400,7 @@ mod tests {
 
     #[test]
     fn apply_edits_should_suggest_similar_text_when_old_text_is_not_found() {
-        let edits = [Replacement {
-            old: "fn mian() {",
-            new: "",
-        }];
+        let edits = [("fn mian() {".to_string(), "".to_string())];
 
         let result = apply_edits(
             "fn main() {\n    println!(\"hello\");\n}\n",
@@ -455,10 +417,7 @@ mod tests {
 
     #[test]
     fn apply_edits_should_report_line_numbers_when_old_text_is_not_unique() {
-        let edits = [Replacement {
-            old: "dup target",
-            new: "",
-        }];
+        let edits = [("dup target".to_string(), "".to_string())];
 
         let result = apply_edits(
             "line one\ndup target\nline three\ndup target\nline five\n",

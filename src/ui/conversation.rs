@@ -23,7 +23,7 @@ pub(crate) struct BlockStyle {
 #[derive(Clone)]
 enum ConvItem {
     Line(ConvLine),
-    Markdown(Vec<Line<'static>>, Align, Option<BlockStyle>),
+    Markdown(Vec<Line<'static>>, Option<BlockStyle>),
 }
 
 #[derive(Clone)]
@@ -106,7 +106,7 @@ impl Conversation {
                 markdown::render_markdown(&source)
             };
             self.items
-                .push(ConvItem::Markdown(rendered, Align::Left, self.md_block));
+                .push(ConvItem::Markdown(rendered, self.md_block));
             self.bump_md_version();
             self.live_md_rendered.clear();
             self.live_md_rendered_version = self.md_version;
@@ -223,13 +223,13 @@ impl Conversation {
                     match item {
                         AssistantContent::Text(t) => {
                             self.flush_md();
-                            self.md_block = Some(block_answer());
+                            self.md_block = Some(block_of(style::assistant_block()));
                             self.md_buf.push_str(&t.text);
                             self.bump_md_version();
                         }
                         AssistantContent::ToolCall(tc) => {
                             self.flush_md();
-                            let blk = block_tool_call();
+                            let blk = block_of(style::tool_call_block());
                             let label = format!("[tool: {}]", tc.function.name);
                             self.items.push(ConvItem::Line(ConvLine::block(
                                 label,
@@ -239,7 +239,7 @@ impl Conversation {
                         }
                         AssistantContent::Reasoning(r) => {
                             self.flush_md();
-                            self.md_block = Some(block_reasoning());
+                            self.md_block = Some(block_of(style::thinking_block()));
                             self.md_buf.push_str(&r.display_text());
                             self.bump_md_version();
                         }
@@ -253,7 +253,7 @@ impl Conversation {
                 self.items.push(ConvItem::Line(ConvLine::block(
                     content.clone(),
                     style::system_block(),
-                    block_system(),
+                    block_of(style::system_block()),
                 )));
             }
         }
@@ -268,9 +268,9 @@ impl Conversation {
                 ConvItem::Line(line) => {
                     out.push((line.to_ratatui_line(), line.align, line.block));
                 }
-                ConvItem::Markdown(rendered, align, block) => {
+                ConvItem::Markdown(rendered, block) => {
                     for line in rendered {
-                        out.push((line.clone(), *align, *block));
+                        out.push((line.clone(), Align::Left, *block));
                     }
                 }
             }
@@ -302,7 +302,7 @@ impl Conversation {
                 self.items.push(ConvItem::Line(ConvLine::empty()));
                 match kind {
                     SectionKind::Reasoning => {
-                        let blk = block_reasoning();
+                        let blk = block_of(style::thinking_block());
                         self.md_block = Some(blk);
                         self.items.push(ConvItem::Line(ConvLine::block(
                             crate::t!("conv-reasoning-label"),
@@ -311,7 +311,7 @@ impl Conversation {
                         )));
                     }
                     SectionKind::Answer => {
-                        let blk = block_answer();
+                        let blk = block_of(style::assistant_block());
                         self.md_block = Some(blk);
                         self.items.push(ConvItem::Line(ConvLine::block(
                             crate::t!("conv-answer-label"),
@@ -325,7 +325,7 @@ impl Conversation {
             OutputItem::Chunk(text) => {
                 if self.md_block.is_none() {
                     self.items.push(ConvItem::Line(ConvLine::empty()));
-                    self.md_block = Some(block_answer());
+                    self.md_block = Some(block_of(style::assistant_block()));
                 }
                 self.md_buf.push_str(&text);
                 self.bump_md_version();
@@ -338,7 +338,7 @@ impl Conversation {
             } => {
                 self.flush_md();
                 self.md_block = None;
-                let blk = block_tool_call();
+                let blk = block_of(style::tool_call_block());
                 self.items.push(ConvItem::Line(ConvLine::empty()));
                 let label = if summary.is_empty() {
                     name
@@ -355,7 +355,7 @@ impl Conversation {
             OutputItem::ToolResult { text, depth } => {
                 self.flush_md();
                 self.md_block = None;
-                let blk = block_tool_result();
+                let blk = block_of(style::tool_result_block());
                 let lines: Vec<&str> = text.lines().collect();
                 let total = lines.len();
                 if total == 0 || (total == 1 && lines[0].trim().is_empty()) {
@@ -395,7 +395,7 @@ impl Conversation {
                     self.items.push(ConvItem::Line(ConvLine::block(
                         text,
                         style::system_block(),
-                        block_system(),
+                        block_of(style::system_block()),
                     )));
                 }
                 false
@@ -418,7 +418,7 @@ impl Conversation {
                         message = info.message
                     ),
                     style::error_block(),
-                    block_error(),
+                    block_of(style::error_block()),
                 )));
                 false
             }
@@ -488,48 +488,7 @@ fn pad_block_runs(
     out
 }
 
-fn block_reasoning() -> BlockStyle {
-    let role = style::thinking_block();
-    BlockStyle {
-        gutter: style::gutter_of(role),
-        bg: role.bg,
-    }
-}
-
-fn block_answer() -> BlockStyle {
-    let role = style::assistant_block();
-    BlockStyle {
-        gutter: style::gutter_of(role),
-        bg: role.bg,
-    }
-}
-
-fn block_tool_call() -> BlockStyle {
-    let role = style::tool_call_block();
-    BlockStyle {
-        gutter: style::gutter_of(role),
-        bg: role.bg,
-    }
-}
-
-fn block_tool_result() -> BlockStyle {
-    let role = style::tool_result_block();
-    BlockStyle {
-        gutter: style::gutter_of(role),
-        bg: role.bg,
-    }
-}
-
-fn block_system() -> BlockStyle {
-    let role = style::system_block();
-    BlockStyle {
-        gutter: style::gutter_of(role),
-        bg: role.bg,
-    }
-}
-
-fn block_error() -> BlockStyle {
-    let role = style::error_block();
+fn block_of(role: Style) -> BlockStyle {
     BlockStyle {
         gutter: style::gutter_of(role),
         bg: role.bg,

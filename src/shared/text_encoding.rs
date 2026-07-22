@@ -51,16 +51,12 @@ pub(crate) fn encoding_for_bom(data: &[u8]) -> Option<(&'static Encoding, usize)
     Encoding::for_bom(data)
 }
 
-fn same_encoding(a: &'static Encoding, b: &'static Encoding) -> bool {
-    std::ptr::eq(a, b)
-}
-
 fn bom_for_encoding(encoding: &'static Encoding) -> &'static [u8] {
-    if same_encoding(encoding, UTF_8) {
+    if std::ptr::eq(encoding, UTF_8) {
         &[0xEF, 0xBB, 0xBF]
-    } else if same_encoding(encoding, UTF_16LE) {
+    } else if std::ptr::eq(encoding, UTF_16LE) {
         &[0xFF, 0xFE]
-    } else if same_encoding(encoding, UTF_16BE) {
+    } else if std::ptr::eq(encoding, UTF_16BE) {
         &[0xFE, 0xFF]
     } else {
         &[]
@@ -76,7 +72,7 @@ pub(crate) fn decode_text(
         .or_else(|| bom.map(|(encoding, _)| encoding))
         .unwrap_or(UTF_8);
     let bom_len = bom
-        .filter(|(bom_encoding, _)| same_encoding(bom_encoding, encoding))
+        .filter(|(bom_encoding, _)| std::ptr::eq(*bom_encoding, encoding))
         .map_or(0, |(_, len)| len);
     let bom_bytes = if bom_len > 0 {
         bom_for_encoding(encoding)
@@ -112,13 +108,13 @@ pub(crate) fn encode_text(
     let mut out = Vec::with_capacity(bom.len() + text.len());
     out.extend_from_slice(bom);
 
-    if same_encoding(encoding, UTF_16LE) {
+    if std::ptr::eq(encoding, UTF_16LE) {
         for unit in text.encode_utf16() {
             out.extend_from_slice(&unit.to_le_bytes());
         }
         return Ok(out);
     }
-    if same_encoding(encoding, UTF_16BE) {
+    if std::ptr::eq(encoding, UTF_16BE) {
         for unit in text.encode_utf16() {
             out.extend_from_slice(&unit.to_be_bytes());
         }

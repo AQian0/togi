@@ -1,5 +1,4 @@
 use crate::shared::util::parse_args_object;
-use itertools::Itertools;
 use rig::tool::{ToolCallExtensions, ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::{Map, Value};
@@ -11,7 +10,12 @@ pub const LIMIT_PARAM: &str = "limit";
 pub fn paginate(default_limit: usize, tools: Vec<Box<dyn ToolDyn>>) -> Vec<Box<dyn ToolDyn>> {
     tools
         .into_iter()
-        .map(|tool| wrap(tool, default_limit))
+        .map(|tool| {
+            Box::new(PaginatedTool {
+                inner: tool,
+                default_limit,
+            }) as Box<dyn ToolDyn>
+        })
         .collect()
 }
 
@@ -61,12 +65,6 @@ impl ToolDyn for PaginatedTool {
     }
 }
 
-fn wrap(inner: Box<dyn ToolDyn>, default_limit: usize) -> Box<dyn ToolDyn> {
-    Box::new(PaginatedTool {
-        inner,
-        default_limit,
-    })
-}
 
 fn paginate_text(
     text: &str,
@@ -97,11 +95,6 @@ fn paginate_text(
     if !paginated {
         return text.to_string();
     }
-    let selected: Vec<&str> = text
-        .lines()
-        .skip(start_idx)
-        .take(end_idx - start_idx)
-        .collect_vec();
     let mut out = String::with_capacity(text.len().min(16_384) + 96);
     let _ = writeln!(
         out,
@@ -113,7 +106,7 @@ fn paginate_text(
             total = total
         )
     );
-    for line in &selected {
+    for line in text.lines().skip(start_idx).take(end_idx - start_idx) {
         out.push_str(line);
         out.push('\n');
     }

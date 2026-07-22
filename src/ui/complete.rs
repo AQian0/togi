@@ -2,20 +2,6 @@
 //!
 //! 输入以 `/` 开头且尚未输入参数时，Tab 在匹配的命令间循环补全。
 
-/// 所有可补全的内置命令（与 `cli::builtins` 的命令集保持一致）。
-pub(crate) const COMMANDS: &[&str] = &[
-    "/clear",
-    "/cwd",
-    "/delete",
-    "/exit",
-    "/help",
-    "/history",
-    "/new",
-    "/quit",
-    "/sessions",
-    "/switch",
-];
-
 /// Tab 循环补全状态：首轮 Tab 计算的候选列表与当前索引。
 pub(crate) struct TabCompletion {
     pub matches: Vec<&'static str>,
@@ -29,9 +15,9 @@ pub(crate) fn is_command_context(text: &str) -> bool {
 
 /// 返回以 `prefix` 开头的命令候选。
 pub(crate) fn candidates(prefix: &str) -> Vec<&'static str> {
-    COMMANDS
+    crate::cli::builtins::HELP_ROWS
         .iter()
-        .copied()
+        .flat_map(|(cmds, _)| cmds.split('\u{3001}'))
         .filter(|c| c.starts_with(prefix))
         .collect()
 }
@@ -44,7 +30,7 @@ mod tests {
     fn candidates_match_prefix() {
         assert_eq!(candidates("/hel"), vec!["/help"]);
         assert_eq!(candidates("/s"), vec!["/sessions", "/switch"]);
-        assert_eq!(candidates("/").len(), COMMANDS.len());
+        assert_eq!(candidates("/q"), vec!["/quit"]);
         assert!(candidates("/nope").is_empty());
     }
 
