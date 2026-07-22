@@ -558,7 +558,8 @@ async fn stream_once<M: CompletionModel + 'static>(
     let stream_request = agent
         .stream_prompt(input)
         .history(history.to_vec())
-        .max_turns(max_multi_turn as usize);
+        .max_turns(max_multi_turn as usize)
+        .tool_concurrency(constants::TOOL_CONCURRENCY);
     // 上下文管理启用时挂载 hook：每次 completion 前检查预算并按需压缩。
     let stream_request = match active_ctx {
         Some(active) => stream_request.add_hook(ContextHook {

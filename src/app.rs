@@ -16,6 +16,7 @@ use crate::ui::theme::CatppuccinFlavor;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;
 use rig::tool::ToolDyn;
+use std::collections::VecDeque;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -150,15 +151,15 @@ impl AppController {
         let ui_tx = tx.clone();
         let registry = Arc::clone(&self.registry);
         let forward_task = tokio::spawn(async move {
-            // 工具调用与结果在流中严格 1:1 交替出现（rig-core streaming.rs
-            // 在每个 tool_call 之后立即执行并 yield 对应的 tool_result，
-            // 然后才进入下一个 tool_call）。因此只需记录最近一个 tool_call
-            // 的副作用类别。
-            let mut pending_effect: Option<ToolEffect> = None;
+            // 并发工具执行时 rig 先按调用顺序发完本轮所有 ToolCall，
+            // 再按同一顺序逐个发 ToolResult（rig-core streaming.rs 的
+            // tool_concurrency 保证）；用 FIFO 队列配对调用与结果的
+            // 副作用类别。
+            let mut pending_effects: VecDeque<ToolEffect> = VecDeque::new();
             while let Some(event) = agent_rx.recv().await {
                 let _ = ui_tx.send(crate::transform::to_output(
                     event,
-                    &mut pending_effect,
+                    &mut pending_effects,
                     &registry,
                 ));
             }

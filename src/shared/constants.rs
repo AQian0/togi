@@ -15,6 +15,10 @@ pub(crate) const DEFAULT_PAGE_LINES: usize = 400;
 /// Agent 流式对话中允许的最大多轮工具调用循环次数。
 pub(crate) const MAX_MULTI_TURN_ITERATIONS: u32 = 10;
 
+/// 单个模型轮次内并发执行的工具调用数上限（rig `tool_concurrency`）。
+/// 一批独立的只读调用（如同时读多个文件）并发后耗时从 sum 降为 max。
+pub(crate) const TOOL_CONCURRENCY: usize = 4;
+
 /// 模型流停滞超时：超过此时间未收到任何流式内容即判定连接已死。
 ///  reasoning 模型的首 token 可能较慢，但流式增量应持续到达。
 pub(crate) const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(120);
