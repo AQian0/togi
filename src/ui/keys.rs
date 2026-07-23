@@ -44,6 +44,11 @@ impl Session {
         }
 
         if key.code == KeyCode::Char('c') && ctrl {
+            if !self.submitting && self.editor.textarea.is_selecting() {
+                self.editor.textarea.input(key);
+                self.last_ctrl_c = None;
+                return (Action::Continue, None);
+            }
             let now = Instant::now();
             match self.last_ctrl_c {
                 Some(last) if now.duration_since(last) <= constants::DOUBLE_PRESS_WINDOW => {
@@ -86,7 +91,7 @@ impl Session {
         match key.code {
             KeyCode::Enter => {
                 if alt || ctrl || shift {
-                    self.editor.newline();
+                    self.editor.textarea.insert_newline();
                 } else if !self.editor.is_blank() {
                     let trimmed = self.editor.text().trim().to_string();
                     if is_exit_command(&trimmed) {
@@ -100,54 +105,34 @@ impl Session {
                     return (Action::Submit, Some(trimmed));
                 }
             }
-            KeyCode::Char('j') if ctrl => self.editor.newline(),
-            KeyCode::Char('a') if ctrl => self.editor.home(),
-            KeyCode::Char('e') if ctrl => self.editor.end(),
-            KeyCode::Char('u') if ctrl => self.editor.kill_to_line_start(),
-            KeyCode::Char('k') if ctrl => self.editor.kill_to_line_end(),
-            KeyCode::Char('w') if ctrl => self.editor.delete_word_left(),
-            KeyCode::Char(_) if alt => {}
-            KeyCode::Char(c) => self.editor.insert_char(c),
+            KeyCode::Char('j') if ctrl => self.editor.textarea.insert_newline(),
+            KeyCode::Char('u') if ctrl => {
+                self.editor.textarea.delete_line_by_head();
+            }
+            KeyCode::Char('z' | 'Z') if ctrl && shift => {
+                self.editor.textarea.redo();
+            }
+            KeyCode::Char('z' | 'Z') if ctrl => {
+                self.editor.textarea.undo();
+            }
             KeyCode::Tab => self.complete_command(),
-            KeyCode::Backspace => {
-                if ctrl || alt {
-                    self.editor.delete_word_left();
-                } else {
-                    self.editor.backspace();
+            KeyCode::Backspace if ctrl || alt => {
+                self.editor.textarea.delete_word();
+            }
+            KeyCode::Up | KeyCode::Down if key.modifiers.is_empty() => {
+                let before = self.editor.textarea.cursor();
+                self.editor.textarea.input(key);
+                if self.editor.textarea.cursor() == before {
+                    if key.code == KeyCode::Up {
+                        self.history_prev();
+                    } else {
+                        self.history_next();
+                    }
                 }
             }
-            KeyCode::Delete => self.editor.delete(),
-            KeyCode::Left => {
-                if ctrl || alt {
-                    self.editor.move_word_left();
-                } else {
-                    self.editor.left();
-                }
+            _ => {
+                self.editor.textarea.input(key);
             }
-            KeyCode::Right => {
-                if ctrl || alt {
-                    self.editor.move_word_right();
-                } else {
-                    self.editor.right();
-                }
-            }
-            KeyCode::Up => {
-                if self.editor.at_first_line() {
-                    self.history_prev();
-                } else {
-                    self.editor.up();
-                }
-            }
-            KeyCode::Down => {
-                if self.editor.at_last_line() {
-                    self.history_next();
-                } else {
-                    self.editor.down();
-                }
-            }
-            KeyCode::Home => self.editor.home(),
-            KeyCode::End => self.editor.end(),
-            _ => {}
         }
         (Action::Continue, None)
     }
@@ -163,7 +148,7 @@ impl Session {
         }
         let text = self.editor.text();
         if !complete::is_command_context(&text) {
-            self.editor.insert_tab();
+            self.editor.textarea.insert_tab();
             return;
         }
         let matches = complete::candidates(&text);

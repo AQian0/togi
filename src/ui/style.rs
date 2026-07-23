@@ -17,10 +17,6 @@ pub fn input_background() -> Style {
     Style::default().bg(c().base).fg(c().text)
 }
 
-pub fn normal() -> Style {
-    Style::default().fg(c().text)
-}
-
 pub fn dim() -> Style {
     Style::default().fg(c().overlay0)
 }

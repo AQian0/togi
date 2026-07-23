@@ -5,6 +5,7 @@
 
 use crate::shared::constants;
 use crate::ui::conversation::{Align, BlockStyle};
+use crate::ui::editor::Editor;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
@@ -28,43 +29,6 @@ fn spans_display_width(spans: &[Span]) -> usize {
 /// 控制字符和零宽字符占 0 列，CJK 等宽字符占 2 列，其余占 1 列。
 pub fn display_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
-}
-
-/// 计算字符串前 `col` 个字符在终端中的显示宽度。
-#[must_use]
-pub fn prefix_width(s: &str, col: usize) -> usize {
-    s.chars().take(col).map(display_width).sum()
-}
-
-/// 按显示宽度截取字符串的可见部分。
-///
-/// 跳过前 `offset` 显示宽度，然后取最多 `width` 显示宽度的字符。
-/// CJK 字符跨边界时用空格填充。
-#[must_use]
-pub fn visible_slice(line: &str, offset: usize, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    let mut col = 0usize;
-    let mut out = String::new();
-    for ch in line.chars() {
-        let w = display_width(ch);
-        if col + w <= offset {
-            col += w;
-            continue;
-        }
-        if col < offset {
-            out.push(' ');
-            col += w;
-            continue;
-        }
-        if col - offset + w > width {
-            break;
-        }
-        out.push(ch);
-        col += w;
-    }
-    out
 }
 
 /// 按显示宽度折行。
@@ -141,16 +105,9 @@ fn block_gutter_span(block: BlockStyle) -> Span<'static> {
 pub(crate) struct FrameRenderState<'a> {
     pub(crate) scroll_view: &'a ScrollView,
     pub(crate) conv_state: &'a mut ScrollViewState,
-    pub(crate) editor_lines: &'a [String],
-    pub(crate) editor_row: usize,
-    pub(crate) editor_col: usize,
-    pub(crate) editor_scroll_row: usize,
-    pub(crate) editor_scroll_col: usize,
-    pub(crate) visible_rows: usize,
-    pub(crate) text_width: usize,
+    pub(crate) editor: &'a Editor,
     pub(crate) separator_style: Style,
     pub(crate) dim_style: Style,
-    pub(crate) normal_style: Style,
 }
 
 /// 将原始对话行（含对齐与块样式）展开为全宽度的最终显示行（已折行、已上色）。
@@ -237,16 +194,9 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
     let FrameRenderState {
         scroll_view,
         conv_state,
-        editor_lines,
-        editor_row,
-        editor_col,
-        editor_scroll_row,
-        editor_scroll_col,
-        visible_rows,
-        text_width,
+        editor,
         separator_style,
         dim_style,
-        normal_style,
     } = state;
     let area = frame.area();
     if area.width < constants::MIN_TERMINAL_WIDTH || area.height < constants::MIN_TERMINAL_HEIGHT {
@@ -257,7 +207,13 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
         area,
     );
 
-    let input_rows = editor_lines.len().clamp(1, constants::MAX_TEXT_ROWS) as u16;
+    let input_rows = editor
+        .textarea
+        .lines()
+        .iter()
+        .map(|line| wrap_line(&Line::from(line.as_str()), area.width as usize).len())
+        .sum::<usize>()
+        .clamp(1, constants::MAX_TEXT_ROWS) as u16;
     let input_height = (input_rows + 2).min(area.height.saturating_sub(2));
     let conv_height = area.height.saturating_sub(input_height);
 
@@ -316,29 +272,8 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
         input_area.width,
         input_area.height.saturating_sub(2),
     );
-    if edit_area.height > 0 && edit_area.width >= 2 && visible_rows > 0 {
-        let vis = visible_rows;
-        let mut edit_display: Vec<Line> = Vec::with_capacity(vis);
-        for v in 0..vis {
-            let li = editor_scroll_row + v;
-            if li >= editor_lines.len() {
-                edit_display.push(Line::from(""));
-                continue;
-            }
-            let rest = visible_slice(&editor_lines[li], editor_scroll_col, text_width);
-            edit_display.push(Line::from(Span::styled(rest, normal_style)));
-        }
-        frame.render_widget(
-            Paragraph::new(edit_display).style(crate::ui::style::input_background()),
-            Rect::new(edit_area.x, edit_area.y, edit_area.width, vis as u16),
-        );
-
-        let vis_row = editor_row.saturating_sub(editor_scroll_row);
-        let cy = (edit_area.y as usize + vis_row).min(edit_area.y as usize + vis - 1);
-        let cx = edit_area.x as usize
-            + prefix_width(&editor_lines[editor_row], editor_col).saturating_sub(editor_scroll_col);
-        let cx = cx.min((edit_area.x + edit_area.width).saturating_sub(1) as usize);
-        frame.set_cursor_position(Position::new(cx as u16, cy as u16));
+    if edit_area.height > 0 && edit_area.width > 0 {
+        frame.render_widget(&editor.textarea, edit_area);
     }
 
     let bottom_sep_y = input_area.y + input_area.height.saturating_sub(1);
@@ -361,12 +296,6 @@ mod tests {
         assert_eq!(display_width('a'), 1);
         assert_eq!(display_width('你'), 2);
         assert_eq!(display_width('\n'), 0);
-    }
-
-    #[test]
-    fn visible_slice_honours_offset_and_width() {
-        assert_eq!(visible_slice("abcdef", 2, 3), "cde");
-        assert_eq!(visible_slice("你好", 1, 3), " 好");
     }
 
     #[test]
@@ -404,7 +333,7 @@ mod tests {
         let view_area = view.area();
         view.render_widget(Paragraph::new(lines), view_area);
 
-        let editor_lines = vec![String::new()];
+        let editor = Editor::new();
         let mut state = ScrollViewState::new();
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
         let mut draw = |state: &mut ScrollViewState| {
@@ -415,16 +344,9 @@ mod tests {
                         FrameRenderState {
                             scroll_view: &view,
                             conv_state: state,
-                            editor_lines: &editor_lines,
-                            editor_row: 0,
-                            editor_col: 0,
-                            editor_scroll_row: 0,
-                            editor_scroll_col: 0,
-                            visible_rows: 1,
-                            text_width: 30,
+                            editor: &editor,
                             separator_style: Style::default(),
                             dim_style: Style::default(),
-                            normal_style: Style::default(),
                         },
                     );
                 })

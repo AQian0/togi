@@ -9,7 +9,7 @@ use crate::ui::conversation::Conversation;
 use crate::ui::editor::Editor;
 use crate::ui::history::History;
 use crate::ui::keys::Action;
-use crate::ui::render::{self, prefix_width};
+use crate::ui::render;
 use crate::ui::style;
 use crate::ui::terminal::{EventPump, TerminalModeGuard};
 use ratatui::backend::CrosstermBackend;
@@ -196,7 +196,7 @@ impl Session {
             },
             Event::Paste(data) if !self.submitting => {
                 self.detach_history();
-                self.editor.insert_str(&data);
+                self.editor.textarea.insert_str(&data);
             }
             Event::Resize(_, _) => {}
             _ => {}
@@ -218,7 +218,7 @@ impl Session {
         .ok()
         .flatten();
         if let Some(text) = text {
-            self.editor.insert_str(&text);
+            self.editor.textarea.insert_str(&text);
         }
     }
 
@@ -239,21 +239,8 @@ impl Session {
             return Ok(());
         }
 
-        let input_rows = self.editor.displayed_rows() as u16;
-        let input_height = (input_rows + 2).min(term_h.saturating_sub(2));
-        let visible_rows = input_height.saturating_sub(2) as usize;
-        let text_width = term_w as usize;
-
-        self.editor.ensure_row_visible(visible_rows);
-        let cursor_line_len = prefix_width(&self.editor.lines[self.editor.row], self.editor.col);
-        self.editor.ensure_col_visible(cursor_line_len, text_width);
-
         let scroll_view = self.conv.cached_scroll_view(term_w, self.submitting);
-        let editor_lines = self.editor.lines.clone();
-        let editor_row = self.editor.row;
-        let editor_col = self.editor.col;
-        let editor_scroll_row = self.editor.scroll_row;
-        let editor_scroll_col = self.editor.scroll_col;
+        let editor = &self.editor;
         let conv_scroll = &mut self.conv_scroll;
 
         self.terminal.draw(|frame| {
@@ -262,16 +249,9 @@ impl Session {
                 render::FrameRenderState {
                     scroll_view,
                     conv_state: conv_scroll,
-                    editor_lines: &editor_lines,
-                    editor_row,
-                    editor_col,
-                    editor_scroll_row,
-                    editor_scroll_col,
-                    visible_rows,
-                    text_width,
+                    editor,
                     separator_style: style::separator(),
                     dim_style: style::dim(),
-                    normal_style: style::normal(),
                 },
             );
         })?;

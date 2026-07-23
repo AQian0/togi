@@ -401,42 +401,37 @@ pub async fn run() -> crate::shared::error::Result<()> {
         task_cancel: global_cancel.clone(),
         submitting: Arc::new(AtomicBool::new(false)),
     };
-    let session_cancel = global_cancel.clone();
-
-    let session_task = tokio::spawn(async move {
-        let result = session
-            .run(
-                move |message, tx| {
-                    controller.spawn_submission(message, tx);
-                },
-                session_cancel,
+    let result = session
+        .run(
+            move |message, tx| {
+                controller.spawn_submission(message, tx);
+            },
+            global_cancel.clone(),
+        )
+        .await;
+    if let Err(e) = result {
+        tracing::error!(error = %e.user_message(), "session error");
+        eprintln!(
+            "{}",
+            crate::t!(
+                "app-session-error",
+                error = e.user_message()
             )
-            .await;
-        if let Err(e) = result {
-            tracing::error!(error = %e.user_message(), "session error");
-            eprintln!(
-                "{}",
-                crate::t!(
-                    "app-session-error",
-                    error = e.user_message()
-                )
-            );
-        }
-        if let Err(e) = session.save_history() {
-            tracing::error!(error = %e.user_message(), "history save failed");
-            eprintln!(
-                "{}",
-                crate::t!(
-                    "app-history-save-error",
-                    error = e.user_message()
-                )
-            );
-        }
-    });
+        );
+    }
+    if let Err(e) = session.save_history() {
+        tracing::error!(error = %e.user_message(), "history save failed");
+        eprintln!(
+            "{}",
+            crate::t!(
+                "app-history-save-error",
+                error = e.user_message()
+            )
+        );
+    }
 
     // Ctrl-C 处理统一由 Session 内部的双击检测负责。
     // Session 退出后，取消所有进行中的后台任务。
-    session_task.await?;
     global_cancel.cancel();
 
     Ok(())
