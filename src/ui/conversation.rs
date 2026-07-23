@@ -2,8 +2,11 @@ use crate::shared::constants;
 use crate::ui::markdown;
 use crate::ui::style;
 use crate::ui::{OutputItem, SectionKind};
+use ratatui::layout::Size;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
+use tui_widgets::scrollview::{ScrollView, ScrollbarVisibility};
 
 /// 对话消息的水平对齐方式。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,10 +76,11 @@ pub(crate) struct Conversation {
     live_md_rendered_version: u64,
     live_md_rendered: Vec<Line<'static>>,
     live_md_render_inflight: Option<u64>,
-    // 显示行缓存：缓存已折行、已上色的最终显示行，避免每次渲染重建。
-    display_cache: Vec<Line<'static>>,
+    // 滚动视图缓存：已折行、已上色的对话内容，避免每帧重建。
+    scroll_view: ScrollView,
     cache_term_width: u16,
     cache_version: u64,
+    cache_submitting: bool,
     content_version: u64,
 }
 
@@ -90,9 +94,10 @@ impl Conversation {
             live_md_rendered_version: 0,
             live_md_rendered: Vec::new(),
             live_md_render_inflight: None,
-            display_cache: Vec::new(),
+            scroll_view: ScrollView::new(Size::new(0, 0)),
             cache_term_width: 0,
             cache_version: 0,
+            cache_submitting: false,
             content_version: 0,
         }
     }
@@ -156,16 +161,35 @@ impl Conversation {
         self.content_version = self.content_version.wrapping_add(1);
     }
 
-    /// 返回已缓存的全宽度显示行（已折行、已上色）。
-    /// 仅当内容或终端宽度变化时才重建缓存；纯滚动时只返回引用，O(1)。
-    pub(crate) fn cached_display_lines(&mut self, term_width: u16) -> &[Line<'static>] {
-        if self.cache_term_width != term_width || self.cache_version != self.content_version {
+    /// 返回已缓存的对话滚动视图（已折行、已上色，含提交中的“ …”占位行）。
+    /// 仅当内容、提交状态或终端宽度变化时才重建缓存；纯滚动时只返回引用，O(1)。
+    pub(crate) fn cached_scroll_view(&mut self, term_width: u16, submitting: bool) -> &ScrollView {
+        if self.cache_term_width != term_width
+            || self.cache_version != self.content_version
+            || self.cache_submitting != submitting
+        {
             let raw = self.all_lines_with_align();
-            self.display_cache = crate::ui::render::build_display_lines(&raw, term_width);
+            let mut lines = crate::ui::render::build_display_lines(&raw, term_width);
+            if submitting {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(" …", style::dim())));
+            }
+            // ponytail: ScrollView 高度为 u16，超限会话丢弃最旧行（上限 65535 行）
+            let overflow = lines.len().saturating_sub(u16::MAX as usize);
+            if overflow > 0 {
+                lines.drain(..overflow);
+            }
+            let height = lines.len() as u16;
+            let mut view = ScrollView::new(Size::new(term_width, height))
+                .scrollbars_visibility(ScrollbarVisibility::Never);
+            let area = view.area();
+            view.render_widget(Paragraph::new(lines).style(style::app_background()), area);
+            self.scroll_view = view;
             self.cache_term_width = term_width;
             self.cache_version = self.content_version;
+            self.cache_submitting = submitting;
         }
-        &self.display_cache
+        &self.scroll_view
     }
 
     pub(crate) fn push_user_message(&mut self, text: &str) {

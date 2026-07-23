@@ -19,6 +19,7 @@ use std::io::{self, Stdout};
 use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
+use tui_widgets::scrollview::ScrollViewState;
 
 pub struct Session {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -28,7 +29,7 @@ pub struct Session {
     pub(crate) editor: Editor,
     pub(crate) history: History,
     pub(crate) submitting: bool,
-    pub(crate) conv_scroll_offset: usize,
+    pub(crate) conv_scroll: ScrollViewState,
     pub(crate) cancel_tx: watch::Sender<bool>,
     pub(crate) last_ctrl_c: Option<Instant>,
     pub(crate) tab_completion: Option<crate::ui::complete::TabCompletion>,
@@ -51,7 +52,7 @@ impl Session {
             editor: Editor::new(),
             history: History::load_default(),
             submitting: false,
-            conv_scroll_offset: 0,
+            conv_scroll: ScrollViewState::new(),
             cancel_tx,
             last_ctrl_c: None,
             tab_completion: None,
@@ -186,10 +187,10 @@ impl Session {
             }
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    self.conv_scroll_offset = self.conv_scroll_offset.saturating_add(1);
+                    self.conv_scroll.scroll_up();
                 }
                 MouseEventKind::ScrollDown => {
-                    self.conv_scroll_offset = self.conv_scroll_offset.saturating_sub(1);
+                    self.conv_scroll.scroll_down();
                 }
                 _ => {}
             },
@@ -221,17 +222,6 @@ impl Session {
         }
     }
 
-    pub(crate) fn conv_page_height(&self) -> usize {
-        let term_h = self.terminal.size().map(|s| s.height).unwrap_or(24);
-        if term_h < 5 {
-            return 0;
-        }
-        let input_rows = self.editor.displayed_rows() as u16;
-        let input_height = (input_rows + 2).min(term_h.saturating_sub(2));
-        let conv_height = term_h.saturating_sub(input_height);
-        conv_height.saturating_sub(2) as usize
-    }
-
     pub(crate) fn apply_output(&mut self, item: OutputItem) -> bool {
         let done = self.conv.apply_output(item);
         if done {
@@ -258,22 +248,20 @@ impl Session {
         let cursor_line_len = prefix_width(&self.editor.lines[self.editor.row], self.editor.col);
         self.editor.ensure_col_visible(cursor_line_len, text_width);
 
-        let display_lines = self.conv.cached_display_lines(term_w);
-        let submitting = self.submitting;
+        let scroll_view = self.conv.cached_scroll_view(term_w, self.submitting);
         let editor_lines = self.editor.lines.clone();
         let editor_row = self.editor.row;
         let editor_col = self.editor.col;
         let editor_scroll_row = self.editor.scroll_row;
         let editor_scroll_col = self.editor.scroll_col;
-        let conv_scroll = self.conv_scroll_offset;
+        let conv_scroll = &mut self.conv_scroll;
 
         self.terminal.draw(|frame| {
             render::render_frame(
                 frame,
                 render::FrameRenderState {
-                    display_lines,
-                    submitting,
-                    conv_scroll_offset: conv_scroll,
+                    scroll_view,
+                    conv_state: conv_scroll,
                     editor_lines: &editor_lines,
                     editor_row,
                     editor_col,

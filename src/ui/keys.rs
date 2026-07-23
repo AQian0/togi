@@ -67,11 +67,10 @@ impl Session {
         }
 
         if key.code == KeyCode::PageUp || key.code == KeyCode::PageDown {
-            let page = self.conv_page_height().max(1);
             if key.code == KeyCode::PageUp {
-                self.conv_scroll_offset = self.conv_scroll_offset.saturating_add(page);
+                self.conv_scroll.scroll_page_up();
             } else {
-                self.conv_scroll_offset = self.conv_scroll_offset.saturating_sub(page);
+                self.conv_scroll.scroll_page_down();
             }
             return (Action::Continue, None);
         }
@@ -97,7 +96,7 @@ impl Session {
                     self.history.push(trimmed.clone());
                     self.editor.clear();
                     self.submitting = true;
-                    self.conv_scroll_offset = 0;
+                    self.conv_scroll.scroll_to_bottom();
                     return (Action::Submit, Some(trimmed));
                 }
             }

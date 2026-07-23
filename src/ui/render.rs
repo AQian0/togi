@@ -9,7 +9,8 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
+use tui_widgets::scrollview::{ScrollView, ScrollViewState};
 
 const GUTTER_MARK: &str = "▎ ";
 
@@ -138,9 +139,8 @@ fn block_gutter_span(block: BlockStyle) -> Span<'static> {
 }
 
 pub(crate) struct FrameRenderState<'a> {
-    pub(crate) display_lines: &'a [Line<'static>],
-    pub(crate) submitting: bool,
-    pub(crate) conv_scroll_offset: usize,
+    pub(crate) scroll_view: &'a ScrollView,
+    pub(crate) conv_state: &'a mut ScrollViewState,
     pub(crate) editor_lines: &'a [String],
     pub(crate) editor_row: usize,
     pub(crate) editor_col: usize,
@@ -235,9 +235,8 @@ pub(crate) fn build_display_lines(
 
 pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
     let FrameRenderState {
-        display_lines,
-        submitting,
-        conv_scroll_offset,
+        scroll_view,
+        conv_state,
         editor_lines,
         editor_row,
         editor_col,
@@ -274,47 +273,27 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
     let input_area = layout[1];
 
     {
-        let total = display_lines.len();
-        let visible = conv_area.height as usize;
-        if total <= visible {
-            let mut final_lines: Vec<Line> = display_lines.to_vec();
-            if submitting {
-                final_lines.push(Line::from(""));
-                final_lines.push(Line::from(Span::styled(" …", dim_style)));
-            }
-            frame.render_widget(
-                Paragraph::new(final_lines).style(crate::ui::style::app_background()),
-                conv_area,
+        // 自动跟随：上一帧位于底部时，本帧钉到新内容底部（流式输出持续追底）。
+        if conv_state.is_at_bottom() {
+            let bottom = scroll_view.size().height.saturating_sub(conv_area.height);
+            conv_state.set_offset(Position::new(0, bottom));
+        }
+        frame.render_stateful_widget(scroll_view, conv_area, &mut *conv_state);
+        if !conv_state.is_at_bottom() {
+            let area = Rect::new(
+                conv_area.x,
+                conv_area.y + conv_area.height.saturating_sub(1),
+                conv_area.width,
+                1,
             );
-        } else {
-            let auto_scroll = total.saturating_sub(visible);
-            let scrolled_up = conv_scroll_offset > 0;
-            let content_vis = if scrolled_up {
-                visible.saturating_sub(1)
-            } else {
-                visible
-            };
-            let scroll = auto_scroll.saturating_sub(conv_scroll_offset);
-            let scroll = scroll.min(total.saturating_sub(content_vis));
-            let mut final_lines: Vec<Line> = display_lines
-                .iter()
-                .skip(scroll)
-                .take(content_vis)
-                .cloned()
-                .collect();
-            if scrolled_up {
-                final_lines.push(Line::from(Span::styled(
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
                     crate::t!("render-scroll-indicator"),
                     dim_style,
-                )));
-            }
-            if submitting {
-                final_lines.push(Line::from(""));
-                final_lines.push(Line::from(Span::styled(" …", dim_style)));
-            }
-            frame.render_widget(
-                Paragraph::new(final_lines).style(crate::ui::style::app_background()),
-                conv_area,
+                )))
+                .style(crate::ui::style::app_background()),
+                area,
             );
         }
     }
@@ -408,6 +387,75 @@ mod tests {
             .map(|line| line.spans.iter().map(|s| &*s.content).collect())
             .collect();
         assert_eq!(text, vec!["你好", "abc"]);
+    }
+
+    #[test]
+    fn scroll_view_follows_bottom_and_flags_scrolled_up() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::layout::Size;
+        use tui_widgets::scrollview::ScrollbarVisibility;
+
+        let lines: Vec<Line<'static>> = (0..20)
+            .map(|i| Line::from(if i == 17 { "x".repeat(30) } else { format!("line{i}") }))
+            .collect();
+        let mut view = ScrollView::new(Size::new(30, lines.len() as u16))
+            .scrollbars_visibility(ScrollbarVisibility::Never);
+        let view_area = view.area();
+        view.render_widget(Paragraph::new(lines), view_area);
+
+        let editor_lines = vec![String::new()];
+        let mut state = ScrollViewState::new();
+        let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
+        let mut draw = |state: &mut ScrollViewState| {
+            terminal
+                .draw(|frame| {
+                    render_frame(
+                        frame,
+                        FrameRenderState {
+                            scroll_view: &view,
+                            conv_state: state,
+                            editor_lines: &editor_lines,
+                            editor_row: 0,
+                            editor_col: 0,
+                            editor_scroll_row: 0,
+                            editor_scroll_col: 0,
+                            visible_rows: 1,
+                            text_width: 30,
+                            separator_style: Style::default(),
+                            dim_style: Style::default(),
+                            normal_style: Style::default(),
+                        },
+                    );
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+
+        // 初始位于底部：最新一行可见，无提示条。
+        let screen = draw(&mut state);
+        assert!(screen.contains("line19"), "底部应显示最新行:\n{screen}");
+        assert!(!screen.contains("PageDown"), "底部不应显示提示条");
+
+        // 向上滚动后：最新行不可见，提示条出现。
+        state.scroll_up();
+        state.scroll_up();
+        let screen = draw(&mut state);
+        assert!(
+            !screen.contains("line19"),
+            "上滚后不应显示最新行:\n{screen}"
+        );
+        assert!(screen.contains("PageDown"), "上滚后应显示提示条:\n{screen}");
+        assert!(
+            !screen.contains('x'),
+            "提示条不应残留底层字符:\n{screen}"
+        );
     }
 
     #[test]
