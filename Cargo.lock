@@ -8911,6 +8911,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "tui-overlay",
  "tui-widgets",
  "turso",
  "unic-langid",
@@ -9300,6 +9301,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51ca8635ed2249ea0a6d3fd83e2644f738179e742fc03721d1df91e3828f5b93"
 dependencies = [
  "ratatui-core",
+]
+
+[[package]]
+name = "tui-overlay"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "161772deae553f1c92bfd89f3a612a7b628a0b1cc0140720232c5bd9789474eb"
+dependencies = [
+ "ratatui-core",
+ "ratatui-widgets",
 ]
 
 [[package]]
