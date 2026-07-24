@@ -254,6 +254,18 @@ impl crate::tools::ClassifyEffect for Modify {
     fn name() -> &'static str {
         Self::NAME
     }
+
+    fn classify(args: &serde_json::Value) -> crate::tools::ToolEffect {
+        if args
+            .get("dry_run")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            crate::tools::ToolEffect::ReadOnlyVerbose
+        } else {
+            crate::tools::ToolEffect::Mutating
+        }
+    }
 }
 
 impl Modify {

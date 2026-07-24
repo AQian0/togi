@@ -62,6 +62,13 @@ pub enum OutputItem {
         /// 子代理深度：0 为主代理，≥1 的结果行缩进展示。
         depth: u32,
     },
+    Approval {
+        name: String,
+        summary: String,
+        /// 子代理深度：0 为主代理，≥1 的确认项缩进展示。
+        depth: u32,
+        response: tokio::sync::oneshot::Sender<crate::tools::ApprovalDecision>,
+    },
     Notice(String),
     Error(ErrorInfo),
     /// 切换会话后重放历史消息

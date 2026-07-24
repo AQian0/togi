@@ -141,7 +141,9 @@ after = ["analyze"]
 
 ### 阶段 3.2：变更类工具的用户确认
 
-- `ToolRegistry` 已有 `ToolEffect::Mutating` 分类 → 在 `transform` / UI 层挂确认：mutating 调用执行前弹确认（可配置白名单 / `always allow`）。
+> **状态：已完成。** `confirm` 工具包装器在执行前阻塞 `Mutating` 调用，经 `AgentEvent` 请求 UI 决策；确认缺失或通道关闭时 fail closed。确认卡片直接复用模型回答的块样式，支持允许一次、拒绝、会话内始终允许；`[approval]` 的 `always_allow` 提供配置白名单。子代理共享同一策略，变更调用逐项确认。
+
+- `ToolRegistry` 已有 `ToolEffect::Mutating` 分类 → 在 `transform` / UI 层挂确认：mutating 调用执行前展示确认（可配置白名单 / `always allow`）。
 - 这是子代理安全性的前提：子代理的 mutating 工具默认继承确认策略，深度执行时可配置自动批准只读。
 - **验收**：`modify` / 写类 shell 命令触发确认；`read` 不触发。
 
@@ -170,7 +172,7 @@ after = ["analyze"]
 
 | 里程碑 | 内容 | 依赖 |
 |---|---|---|
-| **M1** | 1.1 基础子代理 ✅ + 3.2 工具确认 | 无 |
+| **M1** | 1.1 基础子代理 ✅ + 3.2 工具确认 ✅ | 无 |
 | **M2** | 1.2 并行子代理 + 2.1 FTS 索引/检索 | M1 |
 | **M3** | 1.3 编排 DAG + 1.4 黑板通信 | M2、Q4 |
 | **M4** | 2.2 向量 RAG + 2.3 长期记忆（+ 3.3 MCP） | Q1、Q2 |

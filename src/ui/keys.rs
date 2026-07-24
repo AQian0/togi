@@ -4,9 +4,10 @@
 //! 通过独立的 `impl Session` 块直接访问 Session 的 `pub(crate)` 字段。
 
 use crate::shared::constants;
+use crate::tools::ApprovalDecision;
 use crate::ui::complete::{self, TabCompletion};
 use crate::ui::session::Session;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Instant;
 
 /// 按键处理结果。
@@ -22,6 +23,28 @@ pub(crate) fn is_exit_command(input: &str) -> bool {
     matches!(input, "exit" | "quit" | "/exit" | "/quit")
 }
 
+fn approval_decision(key: &KeyEvent) -> Option<ApprovalDecision> {
+    if key.kind == KeyEventKind::Repeat {
+        return None;
+    }
+    if key.code == KeyCode::Esc {
+        return Some(ApprovalDecision::Deny);
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+    {
+        return None;
+    }
+    match key.code {
+        KeyCode::Enter if key.modifiers.is_empty() => Some(ApprovalDecision::AllowOnce),
+        KeyCode::Char('y' | 'Y') => Some(ApprovalDecision::AllowOnce),
+        KeyCode::Char('a' | 'A') => Some(ApprovalDecision::AlwaysAllow),
+        KeyCode::Char('n' | 'N') => Some(ApprovalDecision::Deny),
+        _ => None,
+    }
+}
+
 impl Session {
     /// 处理单个按键事件，返回建议的后续动作和可选的要提交的消息文本。
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> (Action, Option<String>) {
@@ -32,6 +55,13 @@ impl Session {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+        if self.has_pending_approval()
+            && let Some(decision) = approval_decision(&key)
+        {
+            self.resolve_approval(decision);
+            return (Action::Continue, None);
+        }
 
         if key.code == KeyCode::Esc {
             if self.submitting {
@@ -160,5 +190,41 @@ impl Session {
                 self.tab_completion = Some(TabCompletion { matches, index: 0 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approval_keys_map_to_decisions() {
+        assert_eq!(
+            approval_decision(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(ApprovalDecision::AllowOnce)
+        );
+        assert_eq!(
+            approval_decision(&KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)),
+            Some(ApprovalDecision::AlwaysAllow)
+        );
+        assert_eq!(
+            approval_decision(&KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(ApprovalDecision::Deny)
+        );
+    }
+
+    #[test]
+    fn modified_approval_key_is_ignored() {
+        assert_eq!(
+            approval_decision(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+            None
+        );
+    }
+
+    #[test]
+    fn repeated_key_does_not_approve_the_next_queued_tool() {
+        let mut key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        key.kind = KeyEventKind::Repeat;
+        assert_eq!(approval_decision(&key), None);
     }
 }

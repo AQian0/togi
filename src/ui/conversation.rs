@@ -318,6 +318,64 @@ impl Conversation {
         pad_block_runs(out)
     }
 
+    /// 在对话流中展示确认项，直接复用模型回答的卡片样式。
+    pub(crate) fn push_approval(&mut self, name: &str, summary: &str, depth: u32) {
+        self.flush_md();
+        self.md_block = None;
+        let role = style::assistant_block();
+        let blk = block_of(role);
+        let tool = if summary.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name} · {summary}")
+        };
+        self.items.push(ConvItem::Line(ConvLine::empty()));
+        self.items.push(ConvItem::Line(ConvLine::block(
+            indent_label(crate::t!("conv-approval-label"), depth),
+            role,
+            blk,
+        )));
+        self.items.push(ConvItem::Line(ConvLine::block(
+            indent_line(&tool, depth),
+            style::md_base(),
+            blk,
+        )));
+        self.items.push(ConvItem::Line(ConvLine::block(
+            indent_line(&crate::t!("conv-approval-hint"), depth),
+            style::dim(),
+            blk,
+        )));
+        self.bump_content_version();
+    }
+
+    pub(crate) fn push_approval_result(
+        &mut self,
+        name: &str,
+        depth: u32,
+        decision: crate::tools::ApprovalDecision,
+    ) {
+        self.flush_md();
+        self.md_block = None;
+        let text = match decision {
+            crate::tools::ApprovalDecision::AllowOnce => {
+                crate::t!("conv-approval-allowed", tool = name)
+            }
+            crate::tools::ApprovalDecision::AlwaysAllow => {
+                crate::t!("conv-approval-always", tool = name)
+            }
+            crate::tools::ApprovalDecision::Deny => {
+                crate::t!("conv-approval-denied", tool = name)
+            }
+        };
+        let blk = block_of(style::assistant_block());
+        self.items.push(ConvItem::Line(ConvLine::block(
+            indent_line(&text, depth),
+            style::md_base(),
+            blk,
+        )));
+        self.bump_content_version();
+    }
+
     /// 应用输出事件。返回 true 表示当前回答完成。
     pub(crate) fn apply_output(&mut self, item: OutputItem) -> bool {
         let done = match item {
@@ -410,6 +468,7 @@ impl Conversation {
                 }
                 false
             }
+            OutputItem::Approval { .. } => false,
             OutputItem::Notice(text) => {
                 self.flush_md();
                 self.md_block = None;
@@ -559,6 +618,19 @@ mod tests {
             message: "boom".to_string(),
         }));
         assert!(has_block_bg(&conv, style::error_block().bg));
+    }
+
+    #[test]
+    fn approval_reuses_assistant_block_style() {
+        let mut conv = super::Conversation::new();
+        conv.push_approval("modify", "src/main.rs", 0);
+        let expected = super::block_of(style::assistant_block());
+        let blocks: Vec<_> = conv
+            .all_lines_with_align()
+            .into_iter()
+            .filter_map(|(_, _, block)| block)
+            .collect();
+        assert!(!blocks.is_empty() && blocks.iter().all(|block| *block == expected));
     }
 
     #[test]

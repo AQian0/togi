@@ -15,15 +15,42 @@ pub fn summarize_call(name: &str, value: &Value) -> String {
             .and_then(Value::as_str)
             .map(|c| format!("$ {}", truncate_inline(c)))
             .unwrap_or_default(),
-        "modify" => summarize_modify(value),
+        "modify" => summarize_modify(value, true),
         _ => summarize_generic(value),
     }
 }
-fn summarize_modify(value: &Value) -> String {
+
+/// 确认项不能截断关键参数，否则命令尾部的副作用可能对用户不可见。
+pub fn summarize_approval(name: &str, value: &Value) -> String {
+    match name {
+        "shell" => {
+            let mut summary = value
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|command| format!("$ {}", sanitize_multiline(command)))
+                .unwrap_or_else(|| value.to_string());
+            if let Some(env) = value.get("env").filter(|env| !env.is_null()) {
+                summary.push_str("\nenv = ");
+                summary.push_str(&sanitize_multiline(&env.to_string()));
+            }
+            summary
+        }
+        "modify" => summarize_modify(value, false),
+        _ => sanitize_multiline(&value.to_string()),
+    }
+}
+
+fn summarize_modify(value: &Value, truncate: bool) -> String {
     let path = value
         .get("path")
         .and_then(Value::as_str)
-        .map(truncate_inline)
+        .map(|path| {
+            if truncate {
+                truncate_inline(path)
+            } else {
+                sanitize_multiline(path)
+            }
+        })
         .unwrap_or_default();
     let action = if value.get("content_base64").is_some() {
         crate::t!("summarize-write-binary")
@@ -77,9 +104,22 @@ pub fn summarize_readonly_result(text: &str) -> String {
     }
 }
 
+fn sanitize_multiline(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch {
+            '\n' => '\n',
+            '\r' => '\n',
+            '\t' => ' ',
+            ch if ch.is_control() => '�',
+            ch => ch,
+        })
+        .collect()
+}
+
 pub fn truncate_inline(text: &str) -> String {
     let max = crate::shared::constants::SUMMARY_MAX_INLINE_CHARS;
-    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let sanitized = sanitize_multiline(text);
+    let collapsed: String = sanitized.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out: String = collapsed.chars().take(max).collect();
     if collapsed.chars().count() > max {
         out.push('…');
@@ -109,6 +149,20 @@ mod tests {
     fn shell_summary_prefixes_dollar() {
         let v = serde_json::json!({"command": "cargo build"});
         assert_eq!(summarize_call("shell", &v), "$ cargo build");
+    }
+
+    #[test]
+    fn approval_summary_keeps_full_shell_command() {
+        let command = format!("echo {}; rm -rf target", "x".repeat(100));
+        let out = summarize_approval("shell", &serde_json::json!({"command": command}));
+        assert!(out.ends_with("; rm -rf target"));
+        assert!(!out.contains('…'));
+    }
+
+    #[test]
+    fn approval_summary_sanitizes_terminal_controls() {
+        let out = summarize_approval("shell", &serde_json::json!({"command": "echo \u{1b}[31m"}));
+        assert_eq!(out, "$ echo �[31m");
     }
     #[test]
     fn modify_summary_reports_write() {

@@ -4,6 +4,7 @@
 //! 流式产生的事件转换为 UI 可消费的 [`OutputItem`]，包括：
 //! - 推理 / 回答分区标记
 //! - 工具调用的副作用分类与摘要
+//! - 变更类工具确认请求的 UI 转发
 //! - 只读工具结果的折叠展示
 //! - 子代理（[`AgentEvent::Child`]）事件的深度展开与缩进标记
 
@@ -66,9 +67,21 @@ fn to_output_at(
                     text: crate::ui::summarize::summarize_readonly_result(&text),
                     depth,
                 },
-                ToolEffect::Mutating => OutputItem::ToolResult { text, depth },
+                ToolEffect::Mutating | ToolEffect::ReadOnlyVerbose => {
+                    OutputItem::ToolResult { text, depth }
+                }
             }
         }
+        AgentEvent::ApprovalRequest {
+            name,
+            arguments,
+            response,
+        } => OutputItem::Approval {
+            summary: crate::ui::summarize::summarize_approval(&name, &arguments),
+            name,
+            depth,
+            response,
+        },
         AgentEvent::Notice(text) => OutputItem::Notice(indent(text, depth, "↳ ")),
     }
 }
@@ -197,5 +210,29 @@ mod tests {
         assert!(matches!(&out, OutputItem::Notice(t) if t == "  ↳ n"));
         let out = to_output(AgentEvent::Notice("n".into()), &mut pending, &registry);
         assert!(matches!(&out, OutputItem::Notice(t) if t == "n"));
+    }
+
+    #[test]
+    fn child_approval_keeps_depth_and_call_summary() {
+        let registry = registry();
+        let mut pending = HashMap::new();
+        let (response, _decision_rx) = tokio::sync::oneshot::channel();
+        let out = to_output(
+            child(
+                1,
+                AgentEvent::ApprovalRequest {
+                    name: "modify".into(),
+                    arguments: json!({ "path": "a.rs", "content": "x" }),
+                    response,
+                },
+            ),
+            &mut pending,
+            &registry,
+        );
+        assert!(matches!(
+            out,
+            OutputItem::Approval { name, summary, depth: 1, .. }
+                if name == "modify" && summary.contains("a.rs")
+        ));
     }
 }

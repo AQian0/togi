@@ -7,7 +7,7 @@ cli-long-about = togi 是一个运行在终端里的 AI 编程助手，支持多
 # ── Builtin Commands ─────────────────────────────────────────────────
 builtins-help-title = 可用命令
 builtins-shortcuts-title = 快捷键
-builtins-shortcut-esc = Esc           取消当前回答 / 清空当前输入
+builtins-shortcut-esc = Esc           拒绝待确认操作 / 取消当前回答 / 清空当前输入
 builtins-shortcut-ctrl-c = Ctrl-C        退出
 builtins-shortcut-page = PageUp/PageDown  滚动对话历史
 
@@ -57,6 +57,9 @@ agent-stream-error = 模型流式响应失败：{ $source }
 agent-retrying = 请求失败，{ $delay } 秒后重试（第 { $attempt }/{ $max } 次）…
 agent-stalled = 模型响应停滞：{ $secs } 秒未收到任何数据，连接可能已中断。
 agent-unhandled-output = 收到未处理的提供商输出：{ $value }
+approval-denied = 用户拒绝执行工具 `{ $tool }`；该工具未运行。
+approval-cancelled = 工具 `{ $tool }` 的确认已取消；该工具未运行。
+approval-unavailable = 工具 `{ $tool }` 需要用户确认，但确认通道不可用；该工具未运行。
 
 # ── Summarize ────────────────────────────────────────────────────────
 summarize-write = 写入
@@ -119,6 +122,11 @@ context-load-error = 无法加载上下文 checkpoint：{ $error }
 conv-user-label = 用户
 conv-reasoning-label = 思考过程
 conv-answer-label = 回答
+conv-approval-label = 需要确认
+conv-approval-hint = Enter/Y 允许一次 · A 本次会话始终允许 · N/Esc 拒绝
+conv-approval-allowed = 已允许 `{ $tool }` 执行一次
+conv-approval-always = 本次会话始终允许 `{ $tool }`
+conv-approval-denied = 已拒绝 `{ $tool }`
 conv-empty-output = （无输出）
 conv-folded-lines = … 其余 { $count } 行（已折叠）
 conv-retryable =  · 可重试

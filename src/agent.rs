@@ -130,7 +130,7 @@ pub struct ChatOutcome {
     pub context: ContextCheckpoint,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum AgentEvent {
     Section(AgentSection),
     Text(String),
@@ -146,6 +146,11 @@ pub enum AgentEvent {
         /// Rig-generated unique identifier matching the originating
         /// `ToolCall::internal_call_id`.
         internal_call_id: String,
+    },
+    ApprovalRequest {
+        name: String,
+        arguments: serde_json::Value,
+        response: tokio::sync::oneshot::Sender<crate::tools::ApprovalDecision>,
     },
     Notice(String),
     /// 子代理产生的事件：`depth` 为展示深度（1 = 主代理的直接子代理）。

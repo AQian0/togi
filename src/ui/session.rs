@@ -3,7 +3,9 @@
 //! 基于 ratatui 全屏模式，底部始终展示输入区（上横线分隔 + 多行编辑），
 //! 对话内容在上方滚动输出。提交后不清除输入区，流式回答实时刷入上方对话区。
 
+use crate::pipeline::confirm::ApprovalPolicy;
 use crate::shared::constants;
+use crate::tools::ApprovalDecision;
 use crate::ui::OutputItem;
 use crate::ui::conversation::Conversation;
 use crate::ui::editor::Editor;
@@ -15,11 +17,19 @@ use crate::ui::terminal::{EventPump, TerminalModeGuard};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::{Terminal, TerminalOptions, Viewport};
+use std::collections::VecDeque;
 use std::io::{self, Stdout};
 use std::time::Instant;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tui_widgets::scrollview::ScrollViewState;
+
+struct PendingApproval {
+    name: String,
+    summary: String,
+    depth: u32,
+    response: oneshot::Sender<ApprovalDecision>,
+}
 
 pub struct Session {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -33,10 +43,12 @@ pub struct Session {
     pub(crate) cancel_tx: watch::Sender<bool>,
     pub(crate) last_ctrl_c: Option<Instant>,
     pub(crate) tab_completion: Option<crate::ui::complete::TabCompletion>,
+    pending_approvals: VecDeque<PendingApproval>,
+    approval_policy: ApprovalPolicy,
 }
 
 impl Session {
-    pub fn new() -> Result<Self, crate::ui::UiError> {
+    pub fn new(approval_policy: ApprovalPolicy) -> Result<Self, crate::ui::UiError> {
         let terminal_mode = TerminalModeGuard::activate()?;
         let terminal = Terminal::with_options(
             CrosstermBackend::new(io::stdout()),
@@ -56,6 +68,8 @@ impl Session {
             cancel_tx,
             last_ctrl_c: None,
             tab_completion: None,
+            pending_approvals: VecDeque::new(),
+            approval_policy,
         })
     }
 
@@ -223,11 +237,96 @@ impl Session {
     }
 
     pub(crate) fn apply_output(&mut self, item: OutputItem) -> bool {
-        let done = self.conv.apply_output(item);
+        self.advance_closed_approvals();
+        let done = match item {
+            OutputItem::Approval {
+                name,
+                summary,
+                depth,
+                response,
+            } => {
+                if self.approval_policy.is_allowed(&name) {
+                    let _ = response.send(ApprovalDecision::AlwaysAllow);
+                    false
+                } else {
+                    let show = self.pending_approvals.is_empty();
+                    self.pending_approvals.push_back(PendingApproval {
+                        name,
+                        summary,
+                        depth,
+                        response,
+                    });
+                    if show {
+                        self.show_next_approval();
+                    }
+                    false
+                }
+            }
+            OutputItem::Done => {
+                self.pending_approvals.clear();
+                self.conv.apply_output(OutputItem::Done)
+            }
+            item => self.conv.apply_output(item),
+        };
         if done {
             self.submitting = false;
         }
         done
+    }
+
+    pub(crate) fn has_pending_approval(&self) -> bool {
+        !self.pending_approvals.is_empty()
+    }
+
+    pub(crate) fn resolve_approval(&mut self, decision: ApprovalDecision) {
+        let Some(current) = self.pending_approvals.pop_front() else {
+            return;
+        };
+        if current.response.send(decision).is_err() {
+            self.show_next_approval();
+            return;
+        }
+        if decision == ApprovalDecision::AlwaysAllow {
+            self.approval_policy.allow(&current.name);
+        }
+        self.conv
+            .push_approval_result(&current.name, current.depth, decision);
+        self.show_next_approval();
+    }
+
+    fn advance_closed_approvals(&mut self) {
+        let mut advanced = false;
+        while self
+            .pending_approvals
+            .front()
+            .is_some_and(|pending| pending.response.is_closed())
+        {
+            self.pending_approvals.pop_front();
+            advanced = true;
+        }
+        if advanced {
+            self.show_next_approval();
+        }
+    }
+
+    fn show_next_approval(&mut self) {
+        loop {
+            let Some(pending) = self.pending_approvals.front() else {
+                return;
+            };
+            if self.approval_policy.is_allowed(&pending.name) || pending.response.is_closed() {
+                let Some(pending) = self.pending_approvals.pop_front() else {
+                    return;
+                };
+                if self.approval_policy.is_allowed(&pending.name) {
+                    let _ = pending.response.send(ApprovalDecision::AlwaysAllow);
+                }
+                continue;
+            }
+            self.conv
+                .push_approval(&pending.name, &pending.summary, pending.depth);
+            return;
+        }
     }
 
     fn render(&mut self) -> io::Result<()> {

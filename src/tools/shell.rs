@@ -20,10 +20,12 @@ impl crate::tools::ClassifyEffect for Shell {
         Self::NAME
     }
     fn classify(args: &serde_json::Value) -> crate::tools::ToolEffect {
-        let is_query = args
-            .get("command")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(is_query_command);
+        let has_custom_env = args.get("env").is_some_and(|env| !env.is_null());
+        let is_query = !has_custom_env
+            && args
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(is_query_command);
         if is_query {
             crate::tools::ToolEffect::ReadOnly
         } else {
@@ -34,14 +36,19 @@ impl crate::tools::ClassifyEffect for Shell {
 
 /// 判断一条 shell 命令是否为"纯查询"（只读）命令。
 ///
-/// 仅用于决定结果在对话区的展示方式（隐藏冗长输出），不影响命令执行；
-/// 因此采用保守的白名单：命令序列 / 管道中的每一段，其首词都必须是已知
-/// 只读命令，且不含输出重定向。无法确定时一律按有副作用处理（照常展示）。
+/// 该分类同时用于结果折叠与执行确认，因此采用保守白名单：命令序列 / 管道
+/// 中的每一段都必须是已知只读命令，且不得含重定向、换行、命令替换或进程替换。
+/// 无法确定时一律按有副作用处理并请求确认。
 #[must_use]
 fn is_query_command(command: &str) -> bool {
     let command = command.trim();
-    // 任何输出重定向都可能写文件，视为有副作用。
-    if command.is_empty() || command.contains('>') {
+    if command.is_empty()
+        || command
+            .chars()
+            .any(|c| matches!(c, '>' | '\n' | '\r' | '`'))
+        || command.contains("$(")
+        || command.contains("<(")
+    {
         return false;
     }
     let segments: Vec<&str> = command
@@ -49,17 +56,17 @@ fn is_query_command(command: &str) -> bool {
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
         .collect();
-    !segments.is_empty()
-        && segments.iter().all(|segment| {
-            segment
-                .split_whitespace()
-                .next()
-                .is_some_and(is_read_only_command)
-        })
+    !segments.is_empty() && segments.iter().all(|segment| is_read_only_segment(segment))
 }
 
-/// 常见的"纯查询 / 只读"命令白名单。只纳入明确无副作用的命令
-/// （故意排除 `sed`/`awk`/`tee` 等可写入的命令）。
+fn is_read_only_segment(segment: &str) -> bool {
+    let Some(command) = segment.split_whitespace().next() else {
+        return false;
+    };
+    is_read_only_command(command) && (command != "rg" || !segment.contains("--pre"))
+}
+
+/// 常见的"纯查询 / 只读"命令白名单。只纳入明确无副作用的命令。
 #[must_use]
 #[inline]
 fn is_read_only_command(cmd: &str) -> bool {
@@ -70,9 +77,6 @@ fn is_read_only_command(cmd: &str) -> bool {
             | "tail"
             | "wc"
             | "stat"
-            | "file"
-            | "tree"
-            | "find"
             | "grep"
             | "rg"
             | "egrep"
@@ -80,7 +84,6 @@ fn is_read_only_command(cmd: &str) -> bool {
             | "pwd"
             | "which"
             | "whoami"
-            | "date"
             | "du"
             | "df"
             | "echo"
@@ -88,11 +91,9 @@ fn is_read_only_command(cmd: &str) -> bool {
             | "basename"
             | "realpath"
             | "readlink"
-            | "sort"
             | "uniq"
             | "cut"
             | "nl"
-            | "diff"
     )
 }
 
@@ -288,6 +289,23 @@ mod query_tests {
     fn any_mutating_segment_disqualifies_the_whole() {
         assert!(!is_query_command("ls && rm foo"));
         assert!(!is_query_command("cat foo | tee out"));
+    }
+
+    #[test]
+    fn nested_execution_is_not_a_query() {
+        assert!(!is_query_command("echo $(rm foo)"));
+        assert!(!is_query_command("echo `rm foo`"));
+        assert!(!is_query_command("cat <(rm foo)"));
+        assert!(!is_query_command("ls\nrm foo"));
+        assert!(!is_query_command("rg --pre 'rm foo' pattern"));
+    }
+
+    #[test]
+    fn commands_with_mutating_modes_are_not_queries() {
+        assert!(!is_query_command("find . -delete"));
+        assert!(!is_query_command("sort -o out input"));
+        assert!(!is_query_command("date --set tomorrow"));
+        assert!(!is_query_command("tree -o out"));
     }
 
     #[test]

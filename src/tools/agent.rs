@@ -13,10 +13,12 @@ pub use profile::load_profiles;
 
 use crate::agent::{AgentEvent, AgentEventSender, DynamicAgent};
 use crate::context::{ContextCheckpoint, ContextInput};
+use crate::pipeline::confirm::{ApprovalPolicy, confirm};
 use crate::pipeline::inject::{CWD_PARAM, inject};
 use crate::pipeline::paginate::paginate;
 use crate::shared::constants;
 use crate::shared::error::TogiError as _;
+use crate::tools::ToolRegistry;
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
@@ -91,6 +93,7 @@ pub struct AgentTool {
     api_key: Option<String>,
     max_multi_turn: u32,
     depth: u32,
+    approval_policy: ApprovalPolicy,
 }
 
 impl AgentTool {
@@ -108,7 +111,13 @@ impl AgentTool {
             api_key,
             max_multi_turn,
             depth: 0,
+            approval_policy: ApprovalPolicy::default(),
         }
+    }
+
+    pub(crate) fn with_approval_policy(mut self, approval_policy: ApprovalPolicy) -> Self {
+        self.approval_policy = approval_policy;
+        self
     }
 
     /// 派生下一级子代理的工具（深度 +1，多轮上限减半）。
@@ -120,11 +129,12 @@ impl AgentTool {
             api_key: self.api_key.clone(),
             max_multi_turn: (self.max_multi_turn / 2).max(1),
             depth: self.depth + 1,
+            approval_policy: self.approval_policy.clone(),
         }
     }
 
     /// 按 profile 白名单（或默认名单）构建子代理工具集，
-    /// 走与主代理相同的 inject(cwd) / paginate 包装。
+    /// 走与主代理相同的 inject(cwd) / paginate / confirm 包装。
     fn build_child_tools(
         &self,
         profile: Option<(&str, &Profile)>,
@@ -149,16 +159,17 @@ impl AgentTool {
                 }
             });
         }
-        Ok(paginate(
-            constants::DEFAULT_PAGE_LINES,
-            inject(
-                serde_json::Map::from_iter([(
-                    CWD_PARAM.into(),
-                    self.cwd.display().to_string().into(),
-                )]),
-                tools,
-            ),
-        ))
+        let mut registry = ToolRegistry::new();
+        registry.register::<Read>();
+        registry.register::<Shell>();
+        registry.register::<Modify>();
+        registry.register::<AgentTool>();
+        let tools = inject(
+            serde_json::Map::from_iter([(CWD_PARAM.into(), self.cwd.display().to_string().into())]),
+            tools,
+        );
+        let tools = paginate(constants::DEFAULT_PAGE_LINES, tools);
+        Ok(confirm(tools, registry, self.approval_policy.clone()))
     }
 
     async fn run(
@@ -285,7 +296,11 @@ impl crate::tools::ClassifyEffect for AgentTool {
     fn name() -> &'static str {
         Self::NAME
     }
-    // 默认 Mutating：子代理结论作为完整结果展示（只读折叠会丢失结论）。
+
+    fn classify(_args: &serde_json::Value) -> crate::tools::ToolEffect {
+        // 委派本身不产生副作用；子代理的变更工具会各自请求确认。
+        crate::tools::ToolEffect::ReadOnlyVerbose
+    }
 }
 
 impl Tool for AgentTool {
@@ -354,6 +369,7 @@ mod tests {
             api_key: None,
             max_multi_turn: 10,
             depth,
+            approval_policy: ApprovalPolicy::default(),
         }
     }
 
@@ -393,6 +409,33 @@ mod tests {
         let p = profile(&["shell", "shell", "modify"]);
         let names = tool_names(&t.build_child_tools(Some(("x", &p))).unwrap());
         assert_eq!(names, vec!["modify", "shell"]);
+    }
+
+    #[tokio::test]
+    async fn child_mutating_tool_waits_for_parent_approval() {
+        let t = tool(0, HashMap::new());
+        let p = profile(&["modify"]);
+        let tools = t.build_child_tools(Some(("writer", &p))).unwrap();
+        let modify = tools.iter().find(|tool| tool.name() == "modify").unwrap();
+        let mut extensions = ToolCallExtensions::new();
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        extensions.insert(event_tx as AgentEventSender);
+        let (cancel_tx, _) = watch::channel(false);
+        extensions.insert(cancel_tx.subscribe());
+        let mut call = Box::pin(modify.call_structured(
+            serde_json::json!({ "path": "blocked.txt", "content": "x" }).to_string(),
+            &extensions,
+        ));
+
+        let response = tokio::select! {
+            event = event_rx.recv() => match event {
+                Some(AgentEvent::ApprovalRequest { response, .. }) => response,
+                other => panic!("expected approval request, got {other:?}"),
+            },
+            result = &mut call => panic!("modify completed before approval: {result:?}"),
+        };
+        response.send(crate::tools::ApprovalDecision::Deny).unwrap();
+        assert!(call.await.outcome().is_denied());
     }
 
     #[test]

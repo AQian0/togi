@@ -7,7 +7,7 @@ cli-long-about = togi is an AI coding assistant that runs in your terminal, supp
 # ── Builtin Commands ─────────────────────────────────────────────────
 builtins-help-title = Available Commands
 builtins-shortcuts-title = Shortcuts
-builtins-shortcut-esc = Esc           Cancel current response / clear input
+builtins-shortcut-esc = Esc           Deny pending action / cancel response / clear input
 builtins-shortcut-ctrl-c = Ctrl-C        Quit
 builtins-shortcut-page = PageUp/PageDown  Scroll conversation history
 
@@ -57,6 +57,9 @@ agent-stream-error = Model streaming failed: { $source }
 agent-retrying = Request failed, retrying in { $delay }s (attempt { $attempt }/{ $max })…
 agent-stalled = Model stream stalled: no data for { $secs }s; the connection may be dead.
 agent-unhandled-output = received unhandled provider output: { $value }
+approval-denied = The user denied tool `{ $tool }`; it was not run.
+approval-cancelled = Approval for tool `{ $tool }` was cancelled; it was not run.
+approval-unavailable = Tool `{ $tool }` requires approval, but the approval channel is unavailable; it was not run.
 
 # ── Summarize ────────────────────────────────────────────────────────
 summarize-write = Write
@@ -119,6 +122,11 @@ context-load-error = Could not load context checkpoint: { $error }
 conv-user-label = You
 conv-reasoning-label = Reasoning
 conv-answer-label = Answer
+conv-approval-label = Approval required
+conv-approval-hint = Enter/Y allow once · A always allow this session · N/Esc deny
+conv-approval-allowed = Allowed `{ $tool }` once
+conv-approval-always = Always allowing `{ $tool }` for this session
+conv-approval-denied = Denied `{ $tool }`
 conv-empty-output = (no output)
 conv-folded-lines = … { $count } more lines (folded)
 conv-retryable =  · retryable

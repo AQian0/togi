@@ -65,6 +65,14 @@ pub struct SystemConfig {
     pub max_multi_turn: Option<u32>,
 }
 
+/// 变更类工具确认配置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApprovalConfig {
+    /// 无需交互确认的工具名；等价于 UI 中本次会话选择“始终允许”。
+    pub always_allow: Vec<String>,
+}
+
 /// 上下文窗口管理配置。`window_tokens` 未配置时关闭自动上下文管理。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -74,14 +82,15 @@ pub struct ContextConfig {
     pub keep_recent_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub system: SystemConfig,
     #[serde(default)]
     pub context: ContextConfig,
+    #[serde(default)]
+    pub approval: ApprovalConfig,
 }
 
 impl Config {
@@ -207,7 +216,7 @@ mod tests {
         let path = dir.join("togi.toml");
         std::fs::write(
             &path,
-            "[system]\nmodel = \"gpt-4\"\ntheme = \"Mocha\"\nmax_multi_turn = 5\n",
+            "[system]\nmodel = \"gpt-4\"\ntheme = \"Mocha\"\nmax_multi_turn = 5\n\n[approval]\nalways_allow = [\"modify\"]\n",
         )
         .unwrap();
 
@@ -215,6 +224,7 @@ mod tests {
         assert_eq!(config.system.model.as_deref(), Some("gpt-4"));
         assert_eq!(config.system.theme.as_deref(), Some("Mocha"));
         assert_eq!(config.system.max_multi_turn, Some(5));
+        assert_eq!(config.approval.always_allow, vec!["modify"]);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);

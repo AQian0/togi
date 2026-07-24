@@ -1,6 +1,7 @@
 use crate::agent::{ChatOutcome, DynamicAgent, TurnFailure};
 use crate::cli::command::Args;
 use crate::context::{ContextCheckpoint, ContextInput, ContextPolicy};
+use crate::pipeline::confirm::{ApprovalPolicy, confirm};
 use crate::pipeline::inject::{CWD_PARAM, inject};
 use crate::pipeline::paginate::paginate;
 use crate::shared::constants;
@@ -231,6 +232,7 @@ fn build_tools(
     subagent_model: &str,
     api_key: Option<&str>,
     max_multi_turn: u32,
+    approval_policy: ApprovalPolicy,
 ) -> (Vec<Box<dyn ToolDyn>>, ToolRegistry) {
     let mut registry = ToolRegistry::new();
 
@@ -242,23 +244,26 @@ fn build_tools(
     registry.register::<Shell>();
     registry.register::<AgentTool>();
 
-    let tools = paginate(
-        constants::DEFAULT_PAGE_LINES,
-        inject(
-            serde_json::Map::from_iter([(CWD_PARAM.into(), cwd.display().to_string().into())]),
-            vec![
-                Box::new(Read) as Box<dyn ToolDyn>,
-                Box::new(Modify),
-                Box::new(Shell),
-                Box::new(AgentTool::new(
-                    cwd,
-                    subagent_model.to_string(),
-                    api_key.map(str::to_string),
-                    max_multi_turn,
-                )),
-            ],
+    let tools = vec![
+        Box::new(Read) as Box<dyn ToolDyn>,
+        Box::new(Modify),
+        Box::new(Shell),
+        Box::new(
+            AgentTool::new(
+                cwd,
+                subagent_model.to_string(),
+                api_key.map(str::to_string),
+                max_multi_turn,
+            )
+            .with_approval_policy(approval_policy.clone()),
         ),
+    ];
+    let tools = inject(
+        serde_json::Map::from_iter([(CWD_PARAM.into(), cwd.display().to_string().into())]),
+        tools,
     );
+    let tools = paginate(constants::DEFAULT_PAGE_LINES, tools);
+    let tools = confirm(tools, registry.clone(), approval_policy);
 
     (tools, registry)
 }
@@ -374,6 +379,7 @@ pub async fn run() -> crate::shared::error::Result<()> {
         source,
     })?;
     tracing::debug!(cwd = %cwd.display(), model = ?args.model, "app starting");
+    let approval_policy = ApprovalPolicy::new(config.approval.always_allow.iter().cloned());
     let (tools, registry) = build_tools(
         &cwd,
         // 子代理缺省模型跟随主代理（profile 可覆盖）。
@@ -383,10 +389,11 @@ pub async fn run() -> crate::shared::error::Result<()> {
             .map_or(DEEPSEEK_V4_PRO, String::as_str),
         args.api_key.as_deref(),
         config.effective_max_multi_turn(),
+        approval_policy.clone(),
     );
     let agent = Arc::new(build_agent(&args, &config, tools)?);
     let (history, store, session_id, context) = init_history().await;
-    let mut session = Session::new()?;
+    let mut session = Session::new(approval_policy)?;
 
     let global_cancel = CancellationToken::new();
     let controller = AppController {

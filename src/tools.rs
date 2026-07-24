@@ -6,13 +6,23 @@ pub mod shell;
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// 工具调用的副作用类别——决定其结果在对话区如何展示。
+/// 工具调用的副作用类别——决定是否确认及结果如何展示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolEffect {
-    /// 只读 / 查询：仅展示行为与简短摘要，不铺开具体内容。
+    /// 只读 / 查询：无需确认，仅展示行为与简短摘要。
     ReadOnly,
-    /// 有副作用（写入、变更等）：完整展示结果。
+    /// 有副作用（写入、变更等）：执行前确认，完整展示结果。
     Mutating,
+    /// 无直接副作用，但结果需完整展示（如委派结论、dry-run diff）。
+    ReadOnlyVerbose,
+}
+
+/// 用户对一次变更类工具调用的决定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    AllowOnce,
+    AlwaysAllow,
+    Deny,
 }
 
 /// 由具体工具声明其副作用类别与名称，供 [`ToolRegistry`] 收集。
@@ -95,6 +105,27 @@ mod tests {
     }
 
     #[test]
+    fn registry_classify_modify_dry_run_as_read_only_verbose() {
+        let mut registry = ToolRegistry::new();
+        registry.register::<modify::Modify>();
+        let args = serde_json::json!({ "path": "a.txt", "content": "x", "dry_run": true });
+        assert_eq!(
+            registry.classify("modify", &args),
+            ToolEffect::ReadOnlyVerbose
+        );
+    }
+
+    #[test]
+    fn registry_classify_agent_as_read_only_verbose() {
+        let mut registry = ToolRegistry::new();
+        registry.register::<agent::AgentTool>();
+        assert_eq!(
+            registry.classify("agent", &serde_json::json!({ "task": "inspect" })),
+            ToolEffect::ReadOnlyVerbose
+        );
+    }
+
+    #[test]
     fn registry_classify_shell_query_as_read_only_but_mutation_is_not() {
         let mut registry = ToolRegistry::new();
         registry.register::<shell::Shell>();
@@ -102,6 +133,11 @@ mod tests {
         assert_eq!(registry.classify("shell", &query), ToolEffect::ReadOnly);
         let mutate = serde_json::json!({ "command": "rm -rf target" });
         assert_eq!(registry.classify("shell", &mutate), ToolEffect::Mutating);
+        let custom_env = serde_json::json!({ "command": "echo $VALUE", "env": { "VALUE": "x" } });
+        assert_eq!(
+            registry.classify("shell", &custom_env),
+            ToolEffect::Mutating
+        );
     }
 
     #[test]
