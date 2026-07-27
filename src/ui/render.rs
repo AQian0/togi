@@ -6,6 +6,7 @@
 use crate::shared::constants;
 use crate::ui::conversation::{Align, BlockStyle};
 use crate::ui::editor::Editor;
+use crate::ui::menu::Menu;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
@@ -106,6 +107,7 @@ pub(crate) struct FrameRenderState<'a> {
     pub(crate) scroll_view: &'a ScrollView,
     pub(crate) conv_state: &'a mut ScrollViewState,
     pub(crate) editor: &'a Editor,
+    pub(crate) menu: &'a mut Menu,
     pub(crate) separator_style: Style,
     pub(crate) dim_style: Style,
 }
@@ -195,6 +197,7 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
         scroll_view,
         conv_state,
         editor,
+        menu,
         separator_style,
         dim_style,
     } = state;
@@ -285,6 +288,11 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
             bottom_rect,
         );
     }
+
+    // 悬浮菜单最后渲染，覆盖在主界面之上。
+    if menu.is_open() {
+        menu.render(frame, area);
+    }
 }
 
 #[cfg(test)]
@@ -334,6 +342,7 @@ mod tests {
         view.render_widget(Paragraph::new(lines), view_area);
 
         let editor = Editor::new();
+        let mut menu = Menu::new();
         let mut state = ScrollViewState::new();
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
         let mut draw = |state: &mut ScrollViewState| {
@@ -345,6 +354,7 @@ mod tests {
                             scroll_view: &view,
                             conv_state: state,
                             editor: &editor,
+                            menu: &mut menu,
                             separator_style: Style::default(),
                             dim_style: Style::default(),
                         },

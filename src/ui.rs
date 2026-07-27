@@ -107,6 +107,7 @@ pub(crate) mod editor;
 pub(crate) mod history;
 pub(crate) mod keys;
 pub(crate) mod markdown;
+pub(crate) mod menu;
 pub(crate) mod render;
 pub(crate) mod session;
 pub(crate) mod style;

@@ -11,6 +11,7 @@ use crate::ui::conversation::Conversation;
 use crate::ui::editor::Editor;
 use crate::ui::history::History;
 use crate::ui::keys::Action;
+use crate::ui::menu::Menu;
 use crate::ui::render;
 use crate::ui::style;
 use crate::ui::terminal::{EventPump, TerminalModeGuard};
@@ -42,6 +43,7 @@ pub struct Session {
     pub(crate) conv_scroll: ScrollViewState,
     pub(crate) cancel_tx: watch::Sender<bool>,
     pub(crate) last_ctrl_c: Option<Instant>,
+    pub(crate) menu: Menu,
     pub(crate) tab_completion: Option<crate::ui::complete::TabCompletion>,
     pending_approvals: VecDeque<PendingApproval>,
     approval_policy: ApprovalPolicy,
@@ -67,6 +69,7 @@ impl Session {
             conv_scroll: ScrollViewState::new(),
             cancel_tx,
             last_ctrl_c: None,
+            menu: Menu::new(),
             tab_completion: None,
             pending_approvals: VecDeque::new(),
             approval_policy,
@@ -341,6 +344,7 @@ impl Session {
         let scroll_view = self.conv.cached_scroll_view(term_w, self.submitting);
         let editor = &self.editor;
         let conv_scroll = &mut self.conv_scroll;
+        let menu = &mut self.menu;
 
         self.terminal.draw(|frame| {
             render::render_frame(
@@ -349,6 +353,7 @@ impl Session {
                     scroll_view,
                     conv_state: conv_scroll,
                     editor,
+                    menu,
                     separator_style: style::separator(),
                     dim_style: style::dim(),
                 },

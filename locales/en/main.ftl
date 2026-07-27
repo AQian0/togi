@@ -189,3 +189,5 @@ paginate-more-lines = … ({ $count } more lines; call again with offset { $offs
 
 # ── Render ───────────────────────────────────────────────────────────
 render-scroll-indicator = ── Back to bottom (PageDown) ──
+menu-title = Menu
+menu-item-quit = Quit

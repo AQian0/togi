@@ -189,3 +189,5 @@ paginate-more-lines = …（还有 { $count } 行；用 offset { $offset } 再�
 
 # ── Render ───────────────────────────────────────────────────────────
 render-scroll-indicator = ── 回到底部 (PageDown) ──
+menu-title = 菜单
+menu-item-quit = 退出

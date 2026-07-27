@@ -6,6 +6,7 @@
 use crate::shared::constants;
 use crate::tools::ApprovalDecision;
 use crate::ui::complete::{self, TabCompletion};
+use crate::ui::menu::MenuAction;
 use crate::ui::session::Session;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Instant;
@@ -48,6 +49,10 @@ fn approval_decision(key: &KeyEvent) -> Option<ApprovalDecision> {
 impl Session {
     /// 处理单个按键事件，返回建议的后续动作和可选的要提交的消息文本。
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> (Action, Option<String>) {
+        // 菜单打开时接管全部按键。
+        if self.menu.is_open() {
+            return (self.menu_key(key), None);
+        }
         // 任何非 Tab 键都会中断循环补全状态。
         if key.code != KeyCode::Tab {
             self.tab_completion = None;
@@ -68,8 +73,10 @@ impl Session {
                 let _ = self.cancel_tx.send_replace(true);
                 return (Action::Continue, None);
             }
-            self.editor.clear();
-            self.detach_history();
+            // 闲置时唤出悬浮菜单（长按重复事件忽略，防止菜单闪烁）。
+            if key.kind != KeyEventKind::Repeat {
+                self.menu.open();
+            }
             return (Action::Continue, None);
         }
 
@@ -165,6 +172,20 @@ impl Session {
             }
         }
         (Action::Continue, None)
+    }
+
+    /// 菜单按键：Esc 关闭，上下移动，Enter 执行。
+    fn menu_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc if key.kind != KeyEventKind::Repeat => self.menu.close(),
+            KeyCode::Up => self.menu.move_up(),
+            KeyCode::Down => self.menu.move_down(),
+            KeyCode::Enter => match self.menu.selected_action() {
+                MenuAction::Quit => return Action::Quit,
+            },
+            _ => {}
+        }
+        Action::Continue
     }
 
     /// Tab 补全内置命令：首个 Tab 计算候选并填入第一项，后续 Tab 循环切换。
