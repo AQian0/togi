@@ -1,7 +1,7 @@
 use crate::agent::{AgentEvent, AgentEventSender};
+use crate::pipeline::{Inner, flatten};
 use crate::tools::{ApprovalDecision, ToolEffect, ToolRegistry};
-use rig::tool::{ToolCallExtensions, ToolDyn, ToolError, ToolExecutionResult};
-use rig::wasm_compat::WasmBoxedFuture;
+use rig::tool::{DynamicTool, ToolContext, ToolExecutionError};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
@@ -43,144 +43,104 @@ impl Default for ApprovalPolicy {
 
 /// 为所有工具加上统一的变更确认；只读与已放行工具直接透传。
 pub(crate) fn confirm(
-    tools: Vec<Box<dyn ToolDyn>>,
+    tools: Vec<DynamicTool>,
     registry: ToolRegistry,
     policy: ApprovalPolicy,
-) -> Vec<Box<dyn ToolDyn>> {
+) -> Vec<DynamicTool> {
     let registry = Arc::new(registry);
     tools
         .into_iter()
-        .map(|inner| {
-            Box::new(ConfirmedTool {
-                name: inner.name(),
-                inner,
-                registry: Arc::clone(&registry),
-                policy: policy.clone(),
-            }) as Box<dyn ToolDyn>
+        .map(|tool| {
+            let definition = tool.definition();
+            let name = definition.name.clone();
+            let inner = Inner::new(tool);
+            let registry = Arc::clone(&registry);
+            let policy = policy.clone();
+            DynamicTool::new(
+                definition.name,
+                definition.description,
+                definition.parameters,
+                move |context, args| {
+                    let inner = inner.clone();
+                    let registry = Arc::clone(&registry);
+                    let policy = policy.clone();
+                    let name = name.clone();
+                    Box::pin(async move {
+                        match approval(&name, &args, &registry, &policy, context).await {
+                            Ok(()) => flatten(inner.call(args.to_string(), context).await),
+                            Err(message) => Err(ToolExecutionError::refused(message)),
+                        }
+                    })
+                },
+            )
         })
         .collect()
 }
 
-struct ConfirmedTool {
-    name: String,
-    inner: Box<dyn ToolDyn>,
-    registry: Arc<ToolRegistry>,
-    policy: ApprovalPolicy,
-}
+async fn approval(
+    name: &str,
+    args: &serde_json::Value,
+    registry: &ToolRegistry,
+    policy: &ApprovalPolicy,
+    context: &ToolContext,
+) -> Result<(), String> {
+    if registry.classify(name, args) != ToolEffect::Mutating || policy.is_allowed(name) {
+        return Ok(());
+    }
 
-impl ConfirmedTool {
-    async fn approval(&self, args: &str, extensions: &ToolCallExtensions) -> Result<(), String> {
-        let arguments = serde_json::from_str(args)
-            .unwrap_or_else(|_| serde_json::Value::String(args.to_string()));
-        if self.registry.classify(&self.name, &arguments) != ToolEffect::Mutating
-            || self.policy.is_allowed(&self.name)
-        {
-            return Ok(());
-        }
+    let Some(event_tx) = context.get::<AgentEventSender>() else {
+        return Err(crate::t!("approval-unavailable", tool = name));
+    };
+    let Some(mut cancel_rx) = context.get::<watch::Receiver<bool>>().cloned() else {
+        return Err(crate::t!("approval-unavailable", tool = name));
+    };
+    if *cancel_rx.borrow() {
+        return Err(crate::t!("approval-cancelled", tool = name));
+    }
 
-        let Some(event_tx) = extensions.get::<AgentEventSender>() else {
-            return Err(crate::t!("approval-unavailable", tool = self.name.as_str()));
-        };
-        let Some(mut cancel_rx) = extensions.get::<watch::Receiver<bool>>().cloned() else {
-            return Err(crate::t!("approval-unavailable", tool = self.name.as_str()));
-        };
-        if *cancel_rx.borrow() {
-            return Err(crate::t!("approval-cancelled", tool = self.name.as_str()));
-        }
+    let mut allow_rx = policy.subscribe();
+    if allow_rx.borrow().contains(name) {
+        return Ok(());
+    }
+    let (response, decision_rx) = oneshot::channel();
+    if event_tx
+        .send(AgentEvent::ApprovalRequest {
+            name: name.to_string(),
+            arguments: args.clone(),
+            response,
+        })
+        .is_err()
+    {
+        return Err(crate::t!("approval-unavailable", tool = name));
+    }
 
-        let mut allow_rx = self.policy.subscribe();
-        if allow_rx.borrow().contains(&self.name) {
-            return Ok(());
-        }
-        let (response, decision_rx) = oneshot::channel();
-        if event_tx
-            .send(AgentEvent::ApprovalRequest {
-                name: self.name.clone(),
-                arguments,
-                response,
-            })
-            .is_err()
-        {
-            return Err(crate::t!("approval-unavailable", tool = self.name.as_str()));
-        }
-
-        tokio::select! {
-            biased;
-            _ = cancel_rx.changed() => Err(crate::t!(
-                "approval-cancelled",
-                tool = self.name.as_str()
+    tokio::select! {
+        biased;
+        _ = cancel_rx.changed() => Err(crate::t!(
+            "approval-cancelled",
+            tool = name
+        )),
+        decision = decision_rx => match decision {
+            Ok(ApprovalDecision::AllowOnce) => Ok(()),
+            Ok(ApprovalDecision::AlwaysAllow) => {
+                policy.allow(name);
+                Ok(())
+            }
+            Ok(ApprovalDecision::Deny) => Err(crate::t!(
+                "approval-denied",
+                tool = name
             )),
-            decision = decision_rx => match decision {
-                Ok(ApprovalDecision::AllowOnce) => Ok(()),
-                Ok(ApprovalDecision::AlwaysAllow) => {
-                    self.policy.allow(&self.name);
-                    Ok(())
-                }
-                Ok(ApprovalDecision::Deny) => Err(crate::t!(
-                    "approval-denied",
-                    tool = self.name.as_str()
-                )),
-                Err(_) => Err(crate::t!(
-                    "approval-cancelled",
-                    tool = self.name.as_str()
-                )),
-            },
-            allowed = allow_rx.wait_for(|names| names.contains(&self.name)) => allowed
-                .map(|_| ())
-                .map_err(|_| crate::t!(
-                    "approval-unavailable",
-                    tool = self.name.as_str()
-                )),
-        }
-    }
-}
-
-impl ToolDyn for ConfirmedTool {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn description(&self) -> String {
-        self.inner.description()
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        self.inner.parameters()
-    }
-
-    fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            let extensions = ToolCallExtensions::new();
-            self.call_with_extensions(args, &extensions).await
-        })
-    }
-
-    fn call_with_extensions<'a>(
-        &'a self,
-        args: String,
-        extensions: &'a ToolCallExtensions,
-    ) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            match self.approval(&args, extensions).await {
-                Ok(()) => self.inner.call_with_extensions(args, extensions).await,
-                Err(message) => Err(ToolError::ToolCallError(Box::new(std::io::Error::other(
-                    message,
-                )))),
-            }
-        })
-    }
-
-    fn call_structured<'a>(
-        &'a self,
-        args: String,
-        extensions: &'a ToolCallExtensions,
-    ) -> WasmBoxedFuture<'a, ToolExecutionResult> {
-        Box::pin(async move {
-            match self.approval(&args, extensions).await {
-                Ok(()) => self.inner.call_structured(args, extensions).await,
-                Err(message) => ToolExecutionResult::denied(message),
-            }
-        })
+            Err(_) => Err(crate::t!(
+                "approval-cancelled",
+                tool = name
+            )),
+        },
+        allowed = allow_rx.wait_for(|names| names.contains(name)) => allowed
+            .map(|_| ())
+            .map_err(|_| crate::t!(
+                "approval-unavailable",
+                tool = name
+            )),
     }
 }
 
@@ -188,9 +148,10 @@ impl ToolDyn for ConfirmedTool {
 mod tests {
     use super::*;
     use crate::agent::{AgentEvent, AgentEventSender};
+    use crate::pipeline::adapt;
     use crate::tools::{ApprovalDecision, ClassifyEffect};
-    use rig::tool::{ToolCallExtensions, ToolError};
-    use rig::wasm_compat::WasmBoxedFuture;
+    use rig::tool::{Tool, ToolResult, ToolSet};
+    use std::convert::Infallible;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -203,14 +164,14 @@ mod tests {
     }
 
     struct CountingTool {
-        name: &'static str,
         calls: Arc<AtomicUsize>,
     }
 
-    impl ToolDyn for CountingTool {
-        fn name(&self) -> String {
-            self.name.to_string()
-        }
+    impl Tool for CountingTool {
+        const NAME: &'static str = "mutating";
+        type Error = Infallible;
+        type Args = serde_json::Value;
+        type Output = String;
 
         fn description(&self) -> String {
             "test".to_string()
@@ -220,55 +181,52 @@ mod tests {
             serde_json::json!({"type": "object"})
         }
 
-        fn call<'a>(&'a self, _args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-            Box::pin(async move {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                Ok("ran".to_string())
-            })
+        async fn call(
+            &self,
+            _context: &mut ToolContext,
+            _args: Self::Args,
+        ) -> Result<Self::Output, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok("ran".to_string())
         }
     }
 
-    fn guarded_tool(calls: Arc<AtomicUsize>) -> Box<dyn ToolDyn> {
+    async fn execute(tool: &DynamicTool, context: &mut ToolContext) -> ToolResult {
+        let set = ToolSet::from_dynamic_tools(vec![tool.clone()]);
+        set.execute(tool.name(), "{}", context).await
+    }
+
+    fn guarded_tool(calls: Arc<AtomicUsize>) -> DynamicTool {
         guarded_tool_with_policy(calls, ApprovalPolicy::default())
     }
 
-    fn guarded_tool_with_policy(
-        calls: Arc<AtomicUsize>,
-        policy: ApprovalPolicy,
-    ) -> Box<dyn ToolDyn> {
+    fn guarded_tool_with_policy(calls: Arc<AtomicUsize>, policy: ApprovalPolicy) -> DynamicTool {
         let mut registry = ToolRegistry::new();
         registry.register::<Mutating>();
-        confirm(
-            vec![Box::new(CountingTool {
-                name: Mutating::name(),
-                calls,
-            })],
-            registry,
-            policy,
-        )
-        .pop()
-        .unwrap()
+        confirm(vec![adapt(CountingTool { calls })], registry, policy)
+            .pop()
+            .unwrap()
     }
 
-    fn extensions() -> (
-        ToolCallExtensions,
+    fn context() -> (
+        ToolContext,
         tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
         watch::Sender<bool>,
     ) {
-        let mut extensions = ToolCallExtensions::new();
+        let mut context = ToolContext::new();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        extensions.insert(tx as AgentEventSender);
+        context.insert(tx as AgentEventSender);
         let (cancel_tx, _) = watch::channel(false);
-        extensions.insert(cancel_tx.subscribe());
-        (extensions, rx, cancel_tx)
+        context.insert(cancel_tx.subscribe());
+        (context, rx, cancel_tx)
     }
 
     #[tokio::test]
     async fn mutating_tool_waits_for_approval_before_running() {
         let calls = Arc::new(AtomicUsize::new(0));
         let tool = guarded_tool(Arc::clone(&calls));
-        let (extensions, mut events, _cancel_tx) = extensions();
-        let mut call = Box::pin(tool.call_structured("{}".to_string(), &extensions));
+        let (mut context, mut events, _cancel_tx) = context();
+        let mut call = Box::pin(execute(&tool, &mut context));
 
         let response = tokio::select! {
             event = events.recv() => match event {
@@ -281,7 +239,7 @@ mod tests {
 
         response.send(ApprovalDecision::AllowOnce).unwrap();
         let result = call.await;
-        assert!(result.outcome().is_success());
+        assert!(result.is_success());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -289,8 +247,8 @@ mod tests {
     async fn denial_prevents_mutating_tool_execution() {
         let calls = Arc::new(AtomicUsize::new(0));
         let tool = guarded_tool(Arc::clone(&calls));
-        let (extensions, mut events, _cancel_tx) = extensions();
-        let mut call = Box::pin(tool.call_structured("{}".to_string(), &extensions));
+        let (mut context, mut events, _cancel_tx) = context();
+        let mut call = Box::pin(execute(&tool, &mut context));
         let response = tokio::select! {
             event = events.recv() => match event {
                 Some(AgentEvent::ApprovalRequest { response, .. }) => response,
@@ -301,7 +259,7 @@ mod tests {
 
         response.send(ApprovalDecision::Deny).unwrap();
         let result = call.await;
-        assert!(result.outcome().is_denied());
+        assert!(result.is_refused());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
@@ -309,8 +267,8 @@ mod tests {
     async fn always_allow_applies_to_later_calls_in_the_session() {
         let calls = Arc::new(AtomicUsize::new(0));
         let tool = guarded_tool(Arc::clone(&calls));
-        let (extensions, mut events, _cancel_tx) = extensions();
-        let mut first = Box::pin(tool.call_structured("{}".to_string(), &extensions));
+        let (mut context, mut events, _cancel_tx) = context();
+        let mut first = Box::pin(execute(&tool, &mut context));
         let response = tokio::select! {
             event = events.recv() => match event {
                 Some(AgentEvent::ApprovalRequest { response, .. }) => response,
@@ -319,15 +277,15 @@ mod tests {
             result = &mut first => panic!("tool ran before approval: {result:?}"),
         };
         response.send(ApprovalDecision::AlwaysAllow).unwrap();
-        assert!(first.await.outcome().is_success());
+        assert!(first.await.is_success());
 
         let second = tokio::time::timeout(
             std::time::Duration::from_secs(1),
-            tool.call_structured("{}".to_string(), &extensions),
+            execute(&tool, &mut context),
         )
         .await
         .expect("allowlisted call should not wait for UI");
-        assert!(second.outcome().is_success());
+        assert!(second.is_success());
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(events.try_recv().is_err());
     }
@@ -336,8 +294,8 @@ mod tests {
     async fn cancellation_prevents_mutating_tool_execution() {
         let calls = Arc::new(AtomicUsize::new(0));
         let tool = guarded_tool(Arc::clone(&calls));
-        let (extensions, mut events, cancel_tx) = extensions();
-        let mut call = Box::pin(tool.call_structured("{}".to_string(), &extensions));
+        let (mut context, mut events, cancel_tx) = context();
+        let mut call = Box::pin(execute(&tool, &mut context));
         let _response = tokio::select! {
             event = events.recv() => match event {
                 Some(AgentEvent::ApprovalRequest { response, .. }) => response,
@@ -348,7 +306,7 @@ mod tests {
 
         cancel_tx.send_replace(true);
         let result = call.await;
-        assert!(result.outcome().is_denied());
+        assert!(result.is_refused());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
@@ -356,10 +314,8 @@ mod tests {
     async fn missing_ui_channel_fails_closed() {
         let calls = Arc::new(AtomicUsize::new(0));
         let tool = guarded_tool(Arc::clone(&calls));
-        let result = tool
-            .call_structured("{}".to_string(), &ToolCallExtensions::new())
-            .await;
-        assert!(result.outcome().is_denied());
+        let result = execute(&tool, &mut ToolContext::new()).await;
+        assert!(result.is_refused());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
@@ -368,10 +324,8 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let policy = ApprovalPolicy::new([Mutating::name().to_string()]);
         let tool = guarded_tool_with_policy(Arc::clone(&calls), policy);
-        let result = tool
-            .call_structured("{}".to_string(), &ToolCallExtensions::new())
-            .await;
-        assert!(result.outcome().is_success());
+        let result = execute(&tool, &mut ToolContext::new()).await;
+        assert!(result.is_success());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

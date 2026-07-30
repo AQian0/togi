@@ -1,6 +1,6 @@
 use togi::tools::shell::Shell;
 
-fn tool() -> Box<dyn rig::tool::ToolDyn> {
+fn tool() -> crate::support::TestTool {
     crate::support::inject_cwd(std::env::temp_dir(), Shell)
 }
 
@@ -29,7 +29,8 @@ async fn shell_rejects_empty_command() {
 
 #[tokio::test]
 async fn shell_schema_hides_injected_params() {
-    let definition = rig::tool::tool_definition(&*tool());
+    let tool = tool();
+    let definition = tool.definition();
     let properties = definition.parameters["properties"].as_object().unwrap();
     assert!(properties.contains_key("command"));
     assert!(properties.contains_key("timeout_secs"));

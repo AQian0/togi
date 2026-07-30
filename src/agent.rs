@@ -7,14 +7,15 @@ use futures::StreamExt;
 use itertools::Itertools;
 use rig::OneOrMany;
 use rig::agent::{
-    AgentHook, Flow, HookContext, MultiTurnStreamItem, RequestPatch, StepEvent, StepEventKind,
+    AgentHook, CompletionCallAction, CompletionCallEvent, HookContext, MultiTurnStreamItem,
+    RequestPatch, StepEventKind,
 };
 use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::CompletionModel;
 use rig::completion::message::ToolResultContent;
 use rig::message::{AssistantContent, Message, Reasoning, Text, ToolCall, ToolResult, UserContent};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
-use rig::tool::ToolDyn;
+use rig::tool::DynamicTool;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -155,7 +156,10 @@ pub enum AgentEvent {
     Notice(String),
     /// 子代理产生的事件：`depth` 为展示深度（1 = 主代理的直接子代理）。
     /// 嵌套子代理的事件会被多层 `Child` 包裹，转换层取最内层深度。
-    Child { depth: u32, event: Box<AgentEvent> },
+    Child {
+        depth: u32,
+        event: Box<AgentEvent>,
+    },
 }
 
 pub type AgentEventSender = tokio::sync::mpsc::UnboundedSender<AgentEvent>;
@@ -291,7 +295,7 @@ fn canonical_history(err: &rig::agent::StreamingError) -> Option<Vec<Message>> {
 enum TransientKind {
     /// HTTP 429 限流：需要更长的冷却时间。
     ///
-    /// ponytail: rig 0.40 的错误 API 只保留状态码与 body、不暴露响应头，
+    /// ponytail: rig 的错误 API 只保留状态码与 body、不暴露响应头，
     /// 拿不到 Retry-After，退化为更长的指数退避；rig 暴露头信息后再接入。
     RateLimited,
     /// HTTP 5xx：服务端临时故障。
@@ -415,7 +419,6 @@ fn is_context_overflow(err: &AgentError) -> bool {
     let body = match source {
         rig::agent::StreamingError::Completion(e) => e.provider_response_body(),
         rig::agent::StreamingError::Prompt(e) => e.provider_response_body(),
-        _ => None,
     };
     if let Some(body) = body {
         text.push_str(body);
@@ -433,9 +436,11 @@ fn ensure_section(current: &mut AgentSection, target: AgentSection, tx: &AgentEv
 /// 最大尝试次数（含首次请求）。
 const MAX_ATTEMPTS: u32 = 3;
 
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(input_len = input.len(), history_len = history.len()))]
 pub async fn stream_chat<M: CompletionModel + 'static>(
     agent: &rig::agent::Agent<M>,
+    model: &Arc<M>,
     input: &str,
     history: &Arc<[Message]>,
     context: ContextInput,
@@ -455,6 +460,7 @@ pub async fn stream_chat<M: CompletionModel + 'static>(
     loop {
         match stream_once(
             agent,
+            model,
             input,
             history,
             &active,
@@ -536,8 +542,10 @@ fn stall_failure(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stream_once<M: CompletionModel + 'static>(
     agent: &rig::agent::Agent<M>,
+    model: &Arc<M>,
     input: &str,
     history: &[Message],
     active_ctx: &Option<ActiveContext>,
@@ -548,21 +556,21 @@ async fn stream_once<M: CompletionModel + 'static>(
     let mut section = AgentSection::Answer;
     let mut partial = PartialTurn::default();
     let mut final_history: Option<Vec<Message>> = None;
-    // 每次调用注入运行时扩展：事件通道与取消信号，供 agent 等
-    // 需要运行时上下文的工具经 `call_with_extensions` 取用。
-    let mut extensions = rig::tool::ToolCallExtensions::new();
-    extensions.insert(tx.clone());
-    extensions.insert(cancel_rx.clone());
+    // 每次调用注入运行时上下文：事件通道与取消信号，供 agent 等
+    // 需要运行时上下文的工具经 `ToolContext` 取用。
+    let mut tool_context = rig::tool::ToolContext::new();
+    tool_context.insert(tx.clone());
+    tool_context.insert(cancel_rx.clone());
     let stream_request = agent
         .stream_prompt(input)
         .history(history.to_vec())
         .max_turns(max_multi_turn as usize)
         .tool_concurrency(constants::TOOL_CONCURRENCY)
-        .tool_extensions(extensions);
+        .tool_context(tool_context);
     // 上下文管理启用时挂载 hook：每次 completion 前检查预算并按需压缩。
     let stream_request = match active_ctx {
         Some(active) => stream_request.add_hook(ContextHook {
-            model: Arc::clone(&agent.model),
+            model: Arc::clone(model),
             policy: active.policy,
             runtime: Arc::clone(&active.runtime),
             tx: tx.clone(),
@@ -601,7 +609,7 @@ async fn stream_once<M: CompletionModel + 'static>(
             Some(Ok(MultiTurnStreamItem::StreamAssistantItem(content))) => match content {
                 StreamedAssistantContent::Reasoning(reasoning) => {
                     ensure_section(&mut section, AgentSection::Reasoning, tx);
-                    let _ = tx.send(AgentEvent::Text(reasoning.display_text().clone()));
+                    let _ = tx.send(AgentEvent::Text(reasoning.display_text()));
                     partial.push_reasoning(reasoning);
                 }
                 StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
@@ -745,14 +753,14 @@ async fn summarize<M: CompletionModel>(
     }
 }
 
-impl<M: CompletionModel> AgentHook<M> for ContextHook<M> {
-    async fn on_event(&self, _ctx: &HookContext, event: StepEvent<'_, M>) -> Flow {
-        let StepEvent::CompletionCall {
-            prompt, history, ..
-        } = event
-        else {
-            return Flow::cont();
-        };
+impl<M: CompletionModel> AgentHook for ContextHook<M> {
+    async fn on_completion_call(
+        &self,
+        _ctx: &HookContext,
+        event: CompletionCallEvent<'_>,
+    ) -> CompletionCallAction {
+        let prompt = event.prompt;
+        let history = event.history;
         let mut rt = self.runtime.lock().await;
         let checkpoint = rt.checkpoint.clone();
         let active = crate::context::build_active_history(&checkpoint, history);
@@ -768,13 +776,15 @@ impl<M: CompletionModel> AgentHook<M> for ContextHook<M> {
             prompt,
             estimate,
         ) {
-            Decision::None => Flow::cont(),
-            Decision::PatchActive => Flow::patch_request(RequestPatch::new().history(active)),
+            Decision::None => CompletionCallAction::Continue,
+            Decision::PatchActive => {
+                CompletionCallAction::patch(RequestPatch::new().history(active))
+            }
             Decision::Terminate => {
                 // 强制压缩仍无合法切点：返回原始 provider 错误及上下文说明。
                 // （force_compaction 只与 overflow_error 一起设置，None 分支不可达。）
                 let error = rt.overflow_error.take().unwrap_or_default();
-                Flow::terminate(crate::t!("context-compact-impossible", error = error))
+                CompletionCallAction::stop(crate::t!("context-compact-impossible", error = error))
             }
             Decision::Compact(k) => {
                 // force 标志一次性消费：无论本次摘要成败。
@@ -800,7 +810,7 @@ impl<M: CompletionModel> AgentHook<M> for ContextHook<M> {
                             "context-compacted",
                             count = k - covered
                         )));
-                        Flow::patch_request(RequestPatch::new().history(active))
+                        CompletionCallAction::patch(RequestPatch::new().history(active))
                     }
                     Err(err) => {
                         tracing::error!(error = %err, "context compaction failed");
@@ -810,7 +820,7 @@ impl<M: CompletionModel> AgentHook<M> for ContextHook<M> {
                             "context-compact-failed",
                             error = err.to_string()
                         )));
-                        Flow::patch_request(RequestPatch::new().history(active))
+                        CompletionCallAction::patch(RequestPatch::new().history(active))
                     }
                 }
             }
@@ -884,7 +894,7 @@ macro_rules! providers {
             pub fn build(
                 model: &str,
                 preamble: &str,
-                tools: Vec<Box<dyn ToolDyn>>,
+                tools: Vec<DynamicTool>,
                 api_key: Option<&str>,
                 max_multi_turn: u32,
             ) -> Result<Self, AgentError> {
@@ -909,12 +919,16 @@ macro_rules! providers {
                                 })?
                             };
                             tracing::debug!(model, provider = stringify!($variant), "agent built");
+                            // rig 0.41 的 Agent 不再暴露 model 字段；stream_chat 的
+                            // 上下文管理 hook 需要独立持有模型句柄生成滚动摘要。
+                            let model_handle = client.completion_model(model);
                             let inner = Arc::new(
-                                client.agent(model)
+                                rig::agent::AgentBuilder::new(model_handle.clone())
                                     .preamble(preamble)
-                                    .tools(tools)
+                                    .dynamic_tools(tools)
                                     .build(),
                             );
+                            let model_handle = Arc::new(model_handle);
                             return Ok(DynamicAgent {
                                 chat: Box::new(
                                     move |input,
@@ -924,9 +938,11 @@ macro_rules! providers {
                                           cancel_rx,
                                           max_multi_turn| {
                                         let agent = Arc::clone(&inner);
+                                        let model = Arc::clone(&model_handle);
                                         Box::pin(async move {
                                             crate::agent::stream_chat(
                                                 &agent,
+                                                &model,
                                                 &input,
                                                 &history,
                                                 context,
@@ -1563,10 +1579,12 @@ mod tests {
             .preamble("test")
             .tool(MockAddTool)
             .build();
+        let model = Arc::new(model);
         let (tx, _cancel_tx, cancel_rx) = channels();
         let history: Arc<[Message]> = Arc::from(long_history());
         let outcome = stream_chat(
             &agent,
+            &model,
             "go",
             &history,
             ctx_input(test_policy()),
@@ -1612,10 +1630,12 @@ mod tests {
         let agent = rig::agent::AgentBuilder::new(model.clone())
             .preamble("test")
             .build();
+        let model = Arc::new(model);
         let (tx, _cancel_tx, cancel_rx) = channels();
         let history: Arc<[Message]> = Arc::from(long_history());
         let outcome = stream_chat(
             &agent,
+            &model,
             "go",
             &history,
             ctx_input(test_policy()),
@@ -1653,10 +1673,12 @@ mod tests {
             .preamble("test")
             .tool(MockAddTool)
             .build();
+        let model = Arc::new(model);
         let (tx, _cancel_tx, cancel_rx) = channels();
         let history: Arc<[Message]> = Arc::from(long_history());
         let result = stream_chat(
             &agent,
+            &model,
             "go",
             &history,
             ctx_input(test_policy()),
@@ -1688,10 +1710,12 @@ mod tests {
         let agent = rig::agent::AgentBuilder::new(model.clone())
             .preamble("test")
             .build();
+        let model = Arc::new(model);
         let (tx, _cancel_tx, cancel_rx) = channels();
         let history: Arc<[Message]> = Arc::from(long_history());
         let result = stream_chat(
             &agent,
+            &model,
             "go",
             &history,
             ctx_input(test_policy()),
@@ -1722,6 +1746,7 @@ mod tests {
         let agent = rig::agent::AgentBuilder::new(model.clone())
             .preamble("test")
             .build();
+        let model = Arc::new(model);
         // 窗口小到连 prompt 本身都装不下 → 任何切点都非法
         let policy = ContextPolicy {
             window_tokens: 200,
@@ -1732,6 +1757,7 @@ mod tests {
         let history: Arc<[Message]> = Arc::from(long_history());
         let result = stream_chat(
             &agent,
+            &model,
             &"x".repeat(500),
             &history,
             ctx_input(policy),
@@ -1770,6 +1796,7 @@ mod tests {
         let agent = rig::agent::AgentBuilder::new(model.clone())
             .preamble("test")
             .build();
+        let model = Arc::new(model);
         // 极小窗口，保证触发压缩
         let policy = ContextPolicy {
             window_tokens: 200,
@@ -1778,9 +1805,18 @@ mod tests {
         };
         let (tx, _cancel_tx, cancel_rx) = channels();
         let history: Arc<[Message]> = Arc::from(long_history());
-        let outcome = stream_chat(&agent, "go", &history, ctx_input(policy), tx, cancel_rx, 5)
-            .await
-            .expect("summary failure should not fail the turn");
+        let outcome = stream_chat(
+            &agent,
+            &model,
+            "go",
+            &history,
+            ctx_input(policy),
+            tx,
+            cancel_rx,
+            5,
+        )
+        .await
+        .expect("summary failure should not fail the turn");
         assert!(outcome.context.is_empty(), "checkpoint must not advance");
         let reqs = model.requests();
         assert_eq!(reqs.len(), 2, "summary + main stream");

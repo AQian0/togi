@@ -1,23 +1,70 @@
 #![allow(dead_code)]
 
-use rig::tool::ToolDyn;
+use rig::completion::ToolDefinition;
+use rig::tool::{DynamicTool, Tool, ToolContext, ToolSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
-pub fn inject_cwd<T>(cwd: impl AsRef<Path>, tool: T) -> Box<dyn ToolDyn>
+/// 测试侧工具句柄：包装 [`DynamicTool`]，提供旧的 `ToolDyn::call` 风格接口。
+pub struct TestTool {
+    set: ToolSet,
+    definition: ToolDefinition,
+}
+
+impl TestTool {
+    pub fn new(tool: DynamicTool) -> Self {
+        let definition = tool.definition();
+        Self {
+            set: ToolSet::from_dynamic_tools(vec![tool]),
+            definition,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.definition.name
+    }
+
+    pub fn description(&self) -> &str {
+        &self.definition.description
+    }
+
+    pub fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+
+    pub async fn call(&self, args: String) -> Result<String, String> {
+        self.call_with(args, &mut ToolContext::new()).await
+    }
+
+    pub async fn call_with(
+        &self,
+        args: String,
+        context: &mut ToolContext,
+    ) -> Result<String, String> {
+        let result = self.set.execute(&self.definition.name, args, context).await;
+        if let Some(error) = result.error().or_else(|| result.refusal()) {
+            return Err(error.message().to_string());
+        }
+        Ok(result.output().render())
+    }
+}
+
+pub fn inject_cwd<T>(cwd: impl AsRef<Path>, tool: T) -> TestTool
 where
-    T: ToolDyn + 'static,
+    T: Tool + 'static,
 {
     let mut params = serde_json::Map::new();
     params.insert(
         togi::pipeline::inject::CWD_PARAM.into(),
         cwd.as_ref().display().to_string().into(),
     );
-    togi::pipeline::inject::inject(params, vec![Box::new(tool) as Box<dyn ToolDyn>])
-        .pop()
-        .unwrap()
+    TestTool::new(
+        togi::pipeline::inject::inject(params, vec![togi::pipeline::adapt(tool)])
+            .pop()
+            .unwrap(),
+    )
 }
 
 pub struct TestDir {
@@ -98,13 +145,13 @@ pub fn remove_file(path: impl AsRef<Path>) {
 
 pub struct TestContext {
     pub dir: TestDir,
-    pub tool: Box<dyn ToolDyn>,
+    pub tool: TestTool,
 }
 
 impl TestContext {
     pub fn new<T>(tool: T) -> Self
     where
-        T: ToolDyn + 'static,
+        T: Tool + 'static,
     {
         let dir = TestDir::new();
         let tool = inject_cwd(dir.as_ref(), tool);

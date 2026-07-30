@@ -1,64 +1,38 @@
-use crate::shared::util::parse_args_object;
-use rig::tool::{ToolCallExtensions, ToolDyn, ToolError};
-use rig::wasm_compat::WasmBoxedFuture;
+use crate::pipeline::{Inner, args_object, flatten};
+use rig::tool::DynamicTool;
 use serde_json::{Map, Value};
 
 pub const CWD_PARAM: &str = "cwd";
 
 /// Inject hidden runtime parameters (e.g. `cwd`) into every tool call.
-pub fn inject(params: Map<String, Value>, tools: Vec<Box<dyn ToolDyn>>) -> Vec<Box<dyn ToolDyn>> {
+pub fn inject(params: Map<String, Value>, tools: Vec<DynamicTool>) -> Vec<DynamicTool> {
     tools
         .into_iter()
         .map(|tool| {
-            Box::new(InjectedTool {
-                inner: tool,
-                params: params.clone(),
-            }) as Box<dyn ToolDyn>
+            let definition = tool.definition();
+            let mut parameters = definition.parameters.clone();
+            hide_injected_params(&mut parameters, &params);
+            let inner = Inner::new(tool);
+            let params = params.clone();
+            DynamicTool::new(
+                definition.name,
+                definition.description,
+                parameters,
+                move |context, args| {
+                    let inner = inner.clone();
+                    let params = params.clone();
+                    Box::pin(async move {
+                        let mut object = args_object(args)?;
+                        for (key, value) in &params {
+                            object.insert(key.clone(), value.clone());
+                        }
+                        flatten(inner.call(Value::Object(object).to_string(), context).await)
+                    })
+                },
+            )
         })
         .collect()
 }
-
-struct InjectedTool {
-    inner: Box<dyn ToolDyn>,
-    params: Map<String, Value>,
-}
-
-impl ToolDyn for InjectedTool {
-    fn name(&self) -> String {
-        self.inner.name()
-    }
-    fn description(&self) -> String {
-        self.inner.description()
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        let mut parameters = self.inner.parameters();
-        hide_injected_params(&mut parameters, &self.params);
-        parameters
-    }
-    fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            self.call_with_extensions(args, &ToolCallExtensions::new())
-                .await
-        })
-    }
-
-    fn call_with_extensions<'a>(
-        &'a self,
-        args: String,
-        extensions: &'a ToolCallExtensions,
-    ) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            let mut args = parse_args_object(&args)?;
-            for (key, value) in &self.params {
-                args.insert(key.clone(), value.clone());
-            }
-            let args = serde_json::to_string(&args).map_err(ToolError::JsonError)?;
-            self.inner.call_with_extensions(args, extensions).await
-        })
-    }
-}
-
 
 fn hide_injected_params(parameters: &mut Value, params: &Map<String, Value>) {
     let Some(schema) = parameters.as_object_mut() else {
@@ -80,7 +54,8 @@ fn hide_injected_params(parameters: &mut Value, params: &Map<String, Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rig::tool::Tool;
+    use crate::pipeline::{adapt, call};
+    use rig::tool::{Tool, ToolContext};
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
@@ -108,7 +83,11 @@ mod tests {
         fn parameters(&self) -> serde_json::Value {
             serde_json::to_value(schemars::schema_for!(EchoArgs)).unwrap()
         }
-        async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        async fn call(
+            &self,
+            _context: &mut ToolContext,
+            args: Self::Args,
+        ) -> Result<Self::Output, Self::Error> {
             Ok(args)
         }
     }
@@ -128,13 +107,10 @@ mod tests {
 
     #[tokio::test]
     async fn inject_adds_hidden_params_to_tool_calls() {
-        let tools: Vec<Box<dyn ToolDyn>> = inject(
-            test_params(),
-            vec![Box::new(Echo) as Box<dyn ToolDyn>, Box::new(Echo)],
-        );
+        let tools = inject(test_params(), vec![adapt(Echo), adapt(Echo)]);
         assert_eq!(tools.len(), 2);
         for tool in tools {
-            let output = tool.call("null".to_string()).await.unwrap();
+            let output = call(&tool, "null").await.unwrap();
             let output: EchoArgs = serde_json::from_str(&output).unwrap();
             assert_eq!(output.cwd, "/tmp/project");
             assert_eq!(
@@ -146,18 +122,18 @@ mod tests {
 
     #[tokio::test]
     async fn injected_values_override_model_arguments() {
-        let tool: Box<dyn ToolDyn> = inject(test_params(), vec![Box::new(Echo)]).pop().unwrap();
-        let output = tool
-            .call(
-                json!({
-                    "text": "hello",
-                    "cwd": "/hallucinated/path",
-                    "memory": {"project": "wrong"}
-                })
-                .to_string(),
-            )
-            .await
-            .unwrap();
+        let tool = inject(test_params(), vec![adapt(Echo)]).pop().unwrap();
+        let output = call(
+            &tool,
+            &json!({
+                "text": "hello",
+                "cwd": "/hallucinated/path",
+                "memory": {"project": "wrong"}
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
         let output: EchoArgs = serde_json::from_str(&output).unwrap();
         assert_eq!(output.cwd, "/tmp/project");
         assert_eq!(output.memory["project"], "togi");
@@ -165,8 +141,8 @@ mod tests {
 
     #[tokio::test]
     async fn definition_hides_all_injected_params() {
-        let tool: Box<dyn ToolDyn> = inject(test_params(), vec![Box::new(Echo)]).pop().unwrap();
-        let definition = rig::tool::tool_definition(&*tool);
+        let tool = inject(test_params(), vec![adapt(Echo)]).pop().unwrap();
+        let definition = tool.definition();
         let properties = definition.parameters["properties"].as_object().unwrap();
         let required = definition.parameters["required"].as_array().unwrap();
         assert!(!properties.contains_key("cwd"));

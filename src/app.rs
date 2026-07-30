@@ -13,12 +13,12 @@ use crate::tools::read::Read;
 use crate::tools::shell::Shell;
 use crate::tools::{ToolEffect, ToolRegistry};
 use crate::ui::ErrorInfo;
-use crate::ui::session::Session;
 use crate::ui::OutputItem;
+use crate::ui::session::Session;
 use crate::ui::theme::CatppuccinFlavor;
 use rig::message::Message;
 use rig::providers::deepseek::DEEPSEEK_V4_PRO;
-use rig::tool::ToolDyn;
+use rig::tool::DynamicTool;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -233,7 +233,7 @@ fn build_tools(
     api_key: Option<&str>,
     max_multi_turn: u32,
     approval_policy: ApprovalPolicy,
-) -> (Vec<Box<dyn ToolDyn>>, ToolRegistry) {
+) -> (Vec<DynamicTool>, ToolRegistry) {
     let mut registry = ToolRegistry::new();
 
     // 在工具被 inject / paginate 包装之前注册其副作用分类器。
@@ -245,10 +245,10 @@ fn build_tools(
     registry.register::<AgentTool>();
 
     let tools = vec![
-        Box::new(Read) as Box<dyn ToolDyn>,
-        Box::new(Modify),
-        Box::new(Shell),
-        Box::new(
+        crate::pipeline::adapt(Read),
+        crate::pipeline::adapt(Modify),
+        crate::pipeline::adapt(Shell),
+        crate::pipeline::adapt(
             AgentTool::new(
                 cwd,
                 subagent_model.to_string(),
@@ -271,7 +271,7 @@ fn build_tools(
 fn build_agent(
     args: &Args,
     config: &crate::config::Config,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tools: Vec<DynamicTool>,
 ) -> crate::shared::error::Result<DynamicAgent> {
     let model_name = args.model.as_ref().or(config.system.model.as_ref());
     let api_key = args.api_key.as_deref();
@@ -306,8 +306,7 @@ async fn init_history() -> (
     SessionId,
     Arc<RwLock<ContextCheckpoint>>,
 ) {
-    let session_id: SessionId =
-        Arc::new(RwLock::new(constants::DEFAULT_SESSION_ID.to_string()));
+    let session_id: SessionId = Arc::new(RwLock::new(constants::DEFAULT_SESSION_ID.to_string()));
     let empty_history = || Arc::new(RwLock::new(Arc::from(Vec::new())));
     let empty_context = || Arc::new(RwLock::new(ContextCheckpoint::default()));
     let Some(db_path) = crate::store::default_db_path() else {
@@ -420,20 +419,14 @@ pub async fn run() -> crate::shared::error::Result<()> {
         tracing::error!(error = %e.user_message(), "session error");
         eprintln!(
             "{}",
-            crate::t!(
-                "app-session-error",
-                error = e.user_message()
-            )
+            crate::t!("app-session-error", error = e.user_message())
         );
     }
     if let Err(e) = session.save_history() {
         tracing::error!(error = %e.user_message(), "history save failed");
         eprintln!(
             "{}",
-            crate::t!(
-                "app-history-save-error",
-                error = e.user_message()
-            )
+            crate::t!("app-history-save-error", error = e.user_message())
         );
     }
 

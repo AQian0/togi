@@ -1,6 +1,6 @@
 use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
-use rig::tool::{Tool, ToolFailure};
+use rig::tool::{Tool, ToolContext, ToolExecutionError};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -219,26 +219,36 @@ impl Tool for Shell {
         serde_json::to_value(schemars::schema_for!(ShellArgs)).unwrap()
     }
 
-    fn classify_error(&self, error: &Self::Error) -> ToolFailure {
+    fn map_error(&self, error: Self::Error) -> ToolExecutionError {
         match error {
             ShellError::Timeout { secs: _ } => {
-                ToolFailure::timeout(error.to_string()).with_code("shell.timeout")
+                ToolExecutionError::timeout(error.to_string()).with_code("shell.timeout")
             }
             ShellError::EmptyCommand
             | ShellError::MissingCwd
-            | ShellError::BadWorkingDir { .. } => ToolFailure::invalid_args(error.to_string()),
+            | ShellError::BadWorkingDir { .. } => {
+                ToolExecutionError::invalid_args(error.to_string())
+            }
             ShellError::Spawn { .. } | ShellError::Io { .. } => {
-                ToolFailure::other(error.to_string())
+                ToolExecutionError::other(error.to_string())
             }
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         let command = args.command.trim();
         if command.is_empty() {
             return Err(ShellError::EmptyCommand);
         }
-        let cwd = args.cwd.as_deref().map(Path::to_path_buf).ok_or(ShellError::MissingCwd)?;
+        let cwd = args
+            .cwd
+            .as_deref()
+            .map(Path::to_path_buf)
+            .ok_or(ShellError::MissingCwd)?;
         if !cwd.is_dir() {
             return Err(ShellError::BadWorkingDir {
                 path: cwd.display().to_string(),

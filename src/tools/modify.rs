@@ -1,9 +1,7 @@
 use crate::shared::error::{ErrorKind, TogiError};
 use crate::shared::text_encoding::{TextEncodingError, encoding_from_label};
-use crate::shared::util::{
-    FileTooLargeError, ToolPathError, resolve_tool_path,
-};
-use rig::tool::{Tool, ToolFailure};
+use crate::shared::util::{FileTooLargeError, ToolPathError, resolve_tool_path};
+use rig::tool::{Tool, ToolContext, ToolExecutionError};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::io::ErrorKind as IoErrorKind;
@@ -12,7 +10,6 @@ use std::path::{Path, PathBuf};
 mod atomic;
 pub mod edit;
 mod write;
-
 
 #[derive(Deserialize, JsonSchema)]
 struct EditInstruction {
@@ -345,13 +342,13 @@ impl Tool for Modify {
         serde_json::to_value(schemars::schema_for!(ModifyArgs)).unwrap()
     }
 
-    fn classify_error(&self, error: &Self::Error) -> ToolFailure {
+    fn map_error(&self, error: Self::Error) -> ToolExecutionError {
         match error {
             ModifyError::NotFound { .. } => {
-                ToolFailure::not_found(error.to_string()).with_code("modify.not_found")
+                ToolExecutionError::not_found(error.to_string()).with_code("modify.not_found")
             }
             ModifyError::PermissionDenied { .. } => {
-                ToolFailure::permission_denied(error.to_string())
+                ToolExecutionError::permission_denied(error.to_string())
                     .with_code("modify.permission_denied")
             }
             ModifyError::EmptyPath
@@ -368,12 +365,16 @@ impl Tool for Modify {
             | ModifyError::OldTextNotFound { .. }
             | ModifyError::OldTextNotUnique { .. }
             | ModifyError::OverlappingEdits { .. }
-            | ModifyError::NotUtf8 { .. } => ToolFailure::invalid_args(error.to_string()),
-            ModifyError::Io { .. } => ToolFailure::other(error.to_string()),
+            | ModifyError::NotUtf8 { .. } => ToolExecutionError::invalid_args(error.to_string()),
+            ModifyError::Io { .. } => ToolExecutionError::other(error.to_string()),
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         let raw_path = Self::resolve(args.cwd.as_deref(), &args.path)?;
         let path = Self::resolve_symlinks(&raw_path).await?;
         let display = raw_path.display().to_string();

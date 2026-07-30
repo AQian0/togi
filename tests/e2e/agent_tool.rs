@@ -1,5 +1,5 @@
 use crate::support::TestDir;
-use rig::tool::{ToolCallExtensions, ToolDyn};
+use rig::tool::ToolContext;
 use togi::agent::AgentEvent;
 use togi::tools::agent::AgentTool;
 
@@ -19,16 +19,14 @@ fn fixture_dir() -> TestDir {
     dir
 }
 
-/// 返回扩展与 cancel sender——sender 必须活到调用结束：watch sender
+/// 返回上下文与 cancel sender——sender 必须活到调用结束：watch sender
 /// 全部 drop 后 `changed()` 立即就绪，子代理会被瞬时取消。
-fn extensions(
-    tx: togi::agent::AgentEventSender,
-) -> (ToolCallExtensions, tokio::sync::watch::Sender<bool>) {
-    let mut ext = ToolCallExtensions::new();
-    ext.insert(tx);
+fn context(tx: togi::agent::AgentEventSender) -> (ToolContext, tokio::sync::watch::Sender<bool>) {
+    let mut ctx = ToolContext::new();
+    ctx.insert(tx);
     let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
-    ext.insert(cancel_tx.subscribe());
-    (ext, cancel_tx)
+    ctx.insert(cancel_tx.subscribe());
+    (ctx, cancel_tx)
 }
 
 /// 路线图 §1.1 验收：委派子任务 → 子代理事件带深度戳记转发 → 结论回传。
@@ -36,31 +34,34 @@ fn extensions(
 #[ignore = "live: needs DEEPSEEK_API_KEY"]
 async fn agent_tool_runs_subagent_and_returns_conclusion() {
     let dir = fixture_dir();
-    let tool: Box<dyn ToolDyn> = Box::new(AgentTool::new(
+    let tool = crate::support::TestTool::new(togi::pipeline::adapt(AgentTool::new(
         dir.path(),
         rig::providers::deepseek::DEEPSEEK_V4_PRO.to_string(),
         None,
         10,
-    ));
+    )));
     assert_eq!(tool.name(), "agent");
     // profile 出现在工具描述中，供模型选择。
     assert!(tool.description().contains("reader"));
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (ext, _cancel_tx) = extensions(tx);
+    let (mut ctx, _cancel_tx) = context(tx);
     let args = serde_json::json!({
         "task": "读 docs/design.txt，用一句话说明 ToolEffect 的作用。",
         "profile": "reader",
     })
     .to_string();
-    let conclusion = tool.call_with_extensions(args, &ext).await.unwrap();
+    let conclusion = tool.call_with(args, &mut ctx).await.unwrap();
     assert!(!conclusion.trim().is_empty());
 
     // 子代理的工具活动应以 Child{depth:1} 形式转发。
     let mut saw_child_tool_event = false;
     while let Ok(event) = rx.try_recv() {
         if let AgentEvent::Child { depth: 1, event } = event
-            && matches!(*event, AgentEvent::ToolCall { .. } | AgentEvent::ToolResult { .. })
+            && matches!(
+                *event,
+                AgentEvent::ToolCall { .. } | AgentEvent::ToolResult { .. }
+            )
         {
             saw_child_tool_event = true;
         }
@@ -73,15 +74,15 @@ async fn agent_tool_runs_subagent_and_returns_conclusion() {
 #[ignore = "live: needs DEEPSEEK_API_KEY"]
 async fn agent_tool_unknown_profile_is_a_tool_error() {
     let dir = fixture_dir();
-    let tool: Box<dyn ToolDyn> = Box::new(AgentTool::new(
+    let tool = crate::support::TestTool::new(togi::pipeline::adapt(AgentTool::new(
         dir.path(),
         rig::providers::deepseek::DEEPSEEK_V4_PRO.to_string(),
         None,
         10,
-    ));
+    )));
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let (ext, _cancel_tx) = extensions(tx);
+    let (mut ctx, _cancel_tx) = context(tx);
     let args = serde_json::json!({"task": "x", "profile": "nope"}).to_string();
-    let err = tool.call_with_extensions(args, &ext).await.unwrap_err();
+    let err = tool.call_with(args, &mut ctx).await.unwrap_err();
     assert!(err.to_string().contains("reader"), "{err}");
 }

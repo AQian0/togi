@@ -2,8 +2,6 @@
 
 use crate::shared::constants;
 use crate::shared::error::{ErrorKind as TogiErrorKind, TogiError};
-use rig::tool::ToolError;
-use serde_json::{Map, Value};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -182,17 +180,6 @@ pub(crate) fn is_binary(data: &[u8]) -> bool {
         .filter(|&&b| b != b'\n' && b != b'\r' && b != b'\t' && !(0x20..=0x7E).contains(&b))
         .count();
     non_printable as f64 / check_len as f64 > constants::BINARY_NON_PRINTABLE_RATIO
-}
-
-/// 将工具 JSON 参数字符串解析为 `Map<String, Value>`。
-///
-/// 空字符串和 `null` 统一返回空 Map。
-pub(crate) fn parse_args_object(args: &str) -> Result<Map<String, Value>, ToolError> {
-    let trimmed = args.trim();
-    if trimmed.is_empty() || trimmed == "null" {
-        return Ok(Map::new());
-    }
-    serde_json::from_str::<Map<String, Value>>(trimmed).map_err(ToolError::JsonError)
 }
 
 /// 将 diff 拼接到摘要文本后，无 diff 时根据文件是否已存在给出不同提示。

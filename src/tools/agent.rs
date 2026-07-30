@@ -24,7 +24,7 @@ use crate::tools::read::Read;
 use crate::tools::shell::Shell;
 use itertools::Itertools;
 use rig::message::{AssistantContent, Message};
-use rig::tool::{Tool, ToolCallExtensions, ToolFailure};
+use rig::tool::{DynamicTool, Tool, ToolContext, ToolExecutionError};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -138,18 +138,18 @@ impl AgentTool {
     fn build_child_tools(
         &self,
         profile: Option<(&str, &Profile)>,
-    ) -> Result<Vec<Box<dyn rig::tool::ToolDyn>>, AgentToolError> {
+    ) -> Result<Vec<DynamicTool>, AgentToolError> {
         let names: Vec<&str> = match profile {
             Some((_, p)) if !p.tools.is_empty() => p.tools.iter().map(String::as_str).collect(),
             _ => DEFAULT_TOOLS.to_vec(),
         };
-        let mut tools: Vec<Box<dyn rig::tool::ToolDyn>> = Vec::with_capacity(names.len());
+        let mut tools: Vec<DynamicTool> = Vec::with_capacity(names.len());
         for name in names.into_iter().unique() {
             tools.push(match name {
-                Read::NAME => Box::new(Read),
-                Shell::NAME => Box::new(Shell),
-                Modify::NAME => Box::new(Modify),
-                Self::NAME => Box::new(self.spawn_child()),
+                Read::NAME => crate::pipeline::adapt(Read),
+                Shell::NAME => crate::pipeline::adapt(Shell),
+                Modify::NAME => crate::pipeline::adapt(Modify),
+                Self::NAME => crate::pipeline::adapt(self.spawn_child()),
                 other => {
                     return Err(AgentToolError::UnknownTool {
                         profile: profile.map(|(n, _)| n.to_string()).unwrap_or_default(),
@@ -172,22 +172,18 @@ impl AgentTool {
         Ok(confirm(tools, registry, self.approval_policy.clone()))
     }
 
-    async fn run(
-        &self,
-        args: AgentArgs,
-        extensions: &ToolCallExtensions,
-    ) -> Result<String, AgentToolError> {
+    async fn run(&self, args: AgentArgs, context: &ToolContext) -> Result<String, AgentToolError> {
         if self.depth >= MAX_SUBAGENT_DEPTH {
             return Err(AgentToolError::MaxDepth {
                 max: MAX_SUBAGENT_DEPTH,
             });
         }
-        // 运行时注入：事件通道与取消信号由 stream_chat 经 tool_extensions 传入。
-        let parent_tx = extensions
+        // 运行时注入：事件通道与取消信号由 stream_chat 经 tool_context 传入。
+        let parent_tx = context
             .get::<AgentEventSender>()
             .cloned()
             .ok_or(AgentToolError::MissingRuntime)?;
-        let cancel_rx = extensions
+        let cancel_rx = context
             .get::<watch::Receiver<bool>>()
             .cloned()
             .ok_or(AgentToolError::MissingRuntime)?;
@@ -334,25 +330,21 @@ impl Tool for AgentTool {
         serde_json::to_value(schemars::schema_for!(AgentArgs)).unwrap()
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        Err(AgentToolError::MissingRuntime)
-    }
-
-    async fn call_with_extensions(
+    async fn call(
         &self,
+        context: &mut ToolContext,
         args: Self::Args,
-        extensions: &ToolCallExtensions,
     ) -> Result<Self::Output, Self::Error> {
-        self.run(args, extensions).await
+        self.run(args, context).await
     }
 
-    fn classify_error(&self, error: &Self::Error) -> ToolFailure {
+    fn map_error(&self, error: Self::Error) -> ToolExecutionError {
         match error {
             AgentToolError::UnknownProfile { .. } | AgentToolError::UnknownTool { .. } => {
-                ToolFailure::invalid_args(error.to_string())
+                ToolExecutionError::invalid_args(error.to_string())
             }
-            AgentToolError::Timeout { .. } => ToolFailure::timeout(error.to_string()),
-            _ => ToolFailure::other(error.to_string()),
+            AgentToolError::Timeout { .. } => ToolExecutionError::timeout(error.to_string()),
+            _ => ToolExecutionError::other(error.to_string()),
         }
     }
 }
@@ -382,19 +374,23 @@ mod tests {
         }
     }
 
-    /// 返回扩展与 cancel sender——sender 必须活到调用结束：watch sender
+    /// 返回上下文与 cancel sender——sender 必须活到调用结束：watch sender
     /// 全部 drop 后 `changed()` 立即就绪，子代理会被瞬时取消。
-    fn extensions() -> (ToolCallExtensions, watch::Sender<bool>) {
-        let mut ext = ToolCallExtensions::new();
+    fn context() -> (ToolContext, watch::Sender<bool>) {
+        let mut ctx = ToolContext::new();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        ext.insert(tx as AgentEventSender);
+        ctx.insert(tx as AgentEventSender);
         let (cancel_tx, _cancel_rx) = watch::channel(false);
-        ext.insert(cancel_tx.subscribe());
-        (ext, cancel_tx)
+        ctx.insert(cancel_tx.subscribe());
+        (ctx, cancel_tx)
     }
 
-    fn tool_names(tools: &[Box<dyn rig::tool::ToolDyn>]) -> Vec<String> {
-        tools.iter().map(|t| t.name()).sorted().collect()
+    fn tool_names(tools: &[DynamicTool]) -> Vec<String> {
+        tools
+            .iter()
+            .map(|t| t.name().to_string())
+            .sorted()
+            .collect()
     }
 
     #[test]
@@ -416,15 +412,16 @@ mod tests {
         let t = tool(0, HashMap::new());
         let p = profile(&["modify"]);
         let tools = t.build_child_tools(Some(("writer", &p))).unwrap();
-        let modify = tools.iter().find(|tool| tool.name() == "modify").unwrap();
-        let mut extensions = ToolCallExtensions::new();
+        let set = rig::tool::ToolSet::from_dynamic_tools(tools);
+        let mut context = ToolContext::new();
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-        extensions.insert(event_tx as AgentEventSender);
+        context.insert(event_tx as AgentEventSender);
         let (cancel_tx, _) = watch::channel(false);
-        extensions.insert(cancel_tx.subscribe());
-        let mut call = Box::pin(modify.call_structured(
+        context.insert(cancel_tx.subscribe());
+        let mut call = Box::pin(set.execute(
+            "modify",
             serde_json::json!({ "path": "blocked.txt", "content": "x" }).to_string(),
-            &extensions,
+            &mut context,
         ));
 
         let response = tokio::select! {
@@ -435,7 +432,7 @@ mod tests {
             result = &mut call => panic!("modify completed before approval: {result:?}"),
         };
         response.send(crate::tools::ApprovalDecision::Deny).unwrap();
-        assert!(call.await.outcome().is_denied());
+        assert!(call.await.is_refused());
     }
 
     #[test]
@@ -457,7 +454,7 @@ mod tests {
         let p = profile(&["agent", "read"]);
         let tools = t.build_child_tools(Some(("x", &p))).unwrap();
         let nested = tools.iter().find(|tool| tool.name() == "agent").unwrap();
-        let _ = nested; // 深度/轮次无法经 ToolDyn 观察，直接验证 spawn_child。
+        let _ = nested; // 深度/轮次无法经 DynamicTool 观察，直接验证 spawn_child。
         let child = t.spawn_child();
         assert_eq!(child.depth, 2);
         assert_eq!(child.max_multi_turn, 5);
@@ -466,14 +463,14 @@ mod tests {
     #[tokio::test]
     async fn depth_limit_rejects_before_any_work() {
         let t = tool(MAX_SUBAGENT_DEPTH, HashMap::new());
-        let (ext, _cancel_tx) = extensions();
+        let (ctx, _cancel_tx) = context();
         let err = t
             .run(
                 AgentArgs {
                     task: "x".into(),
                     profile: None,
                 },
-                &ext,
+                &ctx,
             )
             .await
             .unwrap_err();
@@ -481,7 +478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_runtime_extensions_is_an_error() {
+    async fn missing_runtime_context_is_an_error() {
         let t = tool(0, HashMap::new());
         let err = t
             .run(
@@ -489,7 +486,7 @@ mod tests {
                     task: "x".into(),
                     profile: None,
                 },
-                &ToolCallExtensions::new(),
+                &ToolContext::new(),
             )
             .await
             .unwrap_err();
@@ -501,14 +498,14 @@ mod tests {
         let mut profiles = HashMap::new();
         profiles.insert("reader".to_string(), profile(&[]));
         let t = tool(0, profiles);
-        let (ext, _cancel_tx) = extensions();
+        let (ctx, _cancel_tx) = context();
         let err = t
             .run(
                 AgentArgs {
                     task: "x".into(),
                     profile: Some("nope".into()),
                 },
-                &ext,
+                &ctx,
             )
             .await
             .unwrap_err();

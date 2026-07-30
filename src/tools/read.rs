@@ -1,10 +1,8 @@
 use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
 use crate::shared::text_encoding::{decode_text, encoding_from_label, is_binary_output_encoding};
-use crate::shared::util::{
-    FileTooLargeError, ToolPathError, is_binary, resolve_tool_path,
-};
-use rig::tool::{Tool, ToolFailure};
+use crate::shared::util::{FileTooLargeError, ToolPathError, is_binary, resolve_tool_path};
+use rig::tool::{Tool, ToolContext, ToolExecutionError};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -183,23 +181,29 @@ impl Tool for Read {
         serde_json::to_value(schemars::schema_for!(ReadArgs)).unwrap()
     }
 
-    fn classify_error(&self, error: &Self::Error) -> ToolFailure {
+    fn map_error(&self, error: Self::Error) -> ToolExecutionError {
         match error {
             ReadError::NotFound { .. } => {
-                ToolFailure::not_found(error.to_string()).with_code("read.not_found")
+                ToolExecutionError::not_found(error.to_string()).with_code("read.not_found")
             }
-            ReadError::PermissionDenied { .. } => ToolFailure::permission_denied(error.to_string())
-                .with_code("read.permission_denied"),
+            ReadError::PermissionDenied { .. } => {
+                ToolExecutionError::permission_denied(error.to_string())
+                    .with_code("read.permission_denied")
+            }
             ReadError::EmptyPath
             | ReadError::MissingCwd
             | ReadError::FileTooLarge(_)
             | ReadError::InvalidEncoding { .. }
-            | ReadError::NotAFile { .. } => ToolFailure::invalid_args(error.to_string()),
-            ReadError::Io { .. } => ToolFailure::other(error.to_string()),
+            | ReadError::NotAFile { .. } => ToolExecutionError::invalid_args(error.to_string()),
+            ReadError::Io { .. } => ToolExecutionError::other(error.to_string()),
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         let path = Self::resolve(args.cwd.as_deref(), &args.path)?;
         let display = path.display().to_string();
 
