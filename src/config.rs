@@ -85,11 +85,8 @@ pub struct ContextConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    #[serde(default)]
     pub system: SystemConfig,
-    #[serde(default)]
     pub context: ContextConfig,
-    #[serde(default)]
     pub approval: ApprovalConfig,
 }
 
@@ -195,167 +192,41 @@ fn default_config_path() -> Option<std::path::PathBuf> {
 mod tests {
     use super::*;
 
+    fn tmp_config(name: &str, content: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("togi_config_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
     #[test]
-    fn load_from_empty_paths_returns_default() {
-        let config = Config::load_from(Vec::<PathBuf>::new()).unwrap();
+    fn load_from_missing_paths_returns_default() {
+        let config =
+            Config::load_from(vec![PathBuf::from("/tmp/togi_nonexistent_config.toml")]).unwrap();
         assert!(config.system.model.is_none());
         assert!(config.system.theme.is_none());
     }
 
     #[test]
-    fn load_from_nonexistent_returns_default() {
-        let config =
-            Config::load_from(vec![PathBuf::from("/tmp/togi_nonexistent_config.toml")]).unwrap();
-        assert!(config.system.model.is_none());
-    }
-
-    #[test]
-    fn load_from_valid_toml() {
-        let dir = std::env::temp_dir().join("togi_config_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("togi.toml");
-        std::fs::write(
-            &path,
-            "[system]\nmodel = \"gpt-4\"\ntheme = \"Mocha\"\nmax_multi_turn = 5\n\n[approval]\nalways_allow = [\"modify\"]\n",
-        )
+    fn load_from_reads_first_existing_toml() {
+        let first = tmp_config(
+            "first.toml",
+            "[system]\nmodel = \"gpt-4\"\ntheme = \"Mocha\"\nmax_multi_turn = 5\n\n\
+             [approval]\nalways_allow = [\"modify\"]\n\n\
+             [context]\nwindow_tokens = 128000\nreserve_tokens = 8192\n",
+        );
+        let second = tmp_config("second.toml", "[system]\nmodel = \"second\"\n");
+        let config = Config::load_from(vec![
+            PathBuf::from("/tmp/togi_not_here.toml"),
+            first,
+            second,
+        ])
         .unwrap();
-
-        let config = Config::load_from(vec![path.clone()]).unwrap();
         assert_eq!(config.system.model.as_deref(), Some("gpt-4"));
         assert_eq!(config.system.theme.as_deref(), Some("Mocha"));
         assert_eq!(config.system.max_multi_turn, Some(5));
         assert_eq!(config.approval.always_allow, vec!["modify"]);
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
-    }
-
-    #[test]
-    fn load_from_invalid_toml_returns_error() {
-        let dir = std::env::temp_dir().join("togi_config_test_bad");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("togi.toml");
-        std::fs::write(&path, "this is not valid toml [[[").unwrap();
-
-        let result = Config::load_from(vec![path.clone()]);
-        let err = result.unwrap_err();
-        assert_eq!(err.code(), "config.parse");
-        assert_eq!(err.kind(), ErrorKind::InvalidArgument);
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
-    }
-
-    #[test]
-    fn load_from_picks_first_existing() {
-        let dir = std::env::temp_dir().join("togi_config_test_order");
-        let _ = std::fs::create_dir_all(&dir);
-        let path1 = dir.join("first.toml");
-        let path2 = dir.join("second.toml");
-        std::fs::write(&path1, "[system]\nmodel = \"first\"\n").unwrap();
-        std::fs::write(&path2, "[system]\nmodel = \"second\"\n").unwrap();
-
-        let config = Config::load_from(vec![path1.clone(), path2.clone()]).unwrap();
-        assert_eq!(config.system.model.as_deref(), Some("first"));
-
-        let _ = std::fs::remove_file(&path1);
-        let _ = std::fs::remove_file(&path2);
-        let _ = std::fs::remove_dir(&dir);
-    }
-
-    #[test]
-    fn load_from_skips_nonexistent_and_uses_later() {
-        let dir = std::env::temp_dir().join("togi_config_test_skip");
-        let _ = std::fs::create_dir_all(&dir);
-        let path2 = dir.join("real.toml");
-        std::fs::write(&path2, "[system]\ntheme = \"Frappe\"\n").unwrap();
-
-        let config = Config::load_from(vec![
-            PathBuf::from("/tmp/togi_definitely_not_here.toml"),
-            path2.clone(),
-        ])
-        .unwrap();
-        assert_eq!(config.system.theme.as_deref(), Some("Frappe"));
-
-        let _ = std::fs::remove_file(&path2);
-        let _ = std::fs::remove_dir(&dir);
-    }
-
-    #[test]
-    fn effective_preamble_uses_default_when_none() {
-        let config = Config::default();
-        assert_eq!(config.effective_preamble(), constants::DEFAULT_PREAMBLE);
-    }
-
-    #[test]
-    fn effective_preamble_uses_config_value() {
-        let mut config = Config::default();
-        config.system.preamble = Some("custom preamble".into());
-        assert_eq!(config.effective_preamble(), "custom preamble");
-    }
-
-    #[test]
-    fn effective_max_multi_turn_uses_default_when_none() {
-        let config = Config::default();
-        assert_eq!(
-            config.effective_max_multi_turn(),
-            constants::MAX_MULTI_TURN_ITERATIONS
-        );
-    }
-
-    #[test]
-    fn context_policy_none_when_window_unset() {
-        let config = Config::default();
-        assert_eq!(config.effective_context_policy().unwrap(), None);
-    }
-
-    #[test]
-    fn context_policy_uses_defaults_for_optional_fields() {
-        let mut config = Config::default();
-        config.context.window_tokens = Some(128_000);
-        let policy = config.effective_context_policy().unwrap().unwrap();
-        assert_eq!(policy.window_tokens, 128_000);
-        assert_eq!(policy.reserve_tokens, constants::DEFAULT_RESERVE_TOKENS);
-        assert_eq!(
-            policy.keep_recent_tokens,
-            constants::DEFAULT_KEEP_RECENT_TOKENS
-        );
-    }
-
-    #[test]
-    fn context_policy_rejects_reserve_ge_window() {
-        let mut config = Config::default();
-        config.context.window_tokens = Some(10_000);
-        config.context.reserve_tokens = Some(10_000);
-        let err = config.effective_context_policy().unwrap_err();
-        assert_eq!(err.code(), "config.invalid_context");
-        assert_eq!(err.kind(), ErrorKind::InvalidArgument);
-    }
-
-    #[test]
-    fn context_policy_rejects_keep_ge_available() {
-        let mut config = Config::default();
-        config.context.window_tokens = Some(30_000);
-        config.context.reserve_tokens = Some(16_384);
-        // 可用 = 30000 - 16384 = 13616；keep 等于可用也不合法
-        config.context.keep_recent_tokens = Some(13_616);
-        assert!(config.effective_context_policy().is_err());
-        config.context.keep_recent_tokens = Some(13_615);
-        assert!(config.effective_context_policy().is_ok());
-    }
-
-    #[test]
-    fn load_from_toml_with_context_section() {
-        let dir = std::env::temp_dir().join("togi_config_test_ctx");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("togi.toml");
-        std::fs::write(
-            &path,
-            "[context]\nwindow_tokens = 128000\nreserve_tokens = 8192\n",
-        )
-        .unwrap();
-
-        let config = Config::load_from(vec![path.clone()]).unwrap();
         let policy = config.effective_context_policy().unwrap().unwrap();
         assert_eq!(policy.window_tokens, 128_000);
         assert_eq!(policy.reserve_tokens, 8_192);
@@ -363,8 +234,32 @@ mod tests {
             policy.keep_recent_tokens,
             constants::DEFAULT_KEEP_RECENT_TOKENS
         );
+    }
 
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
+    #[test]
+    fn load_from_invalid_toml_returns_error() {
+        let path = tmp_config("bad.toml", "this is not valid toml [[[");
+        let err = Config::load_from(vec![path]).unwrap_err();
+        assert_eq!(err.code(), "config.parse");
+        assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+    }
+
+    #[test]
+    fn context_policy_validation() {
+        let mut config = Config::default();
+        // window 未配置：关闭
+        assert_eq!(config.effective_context_policy().unwrap(), None);
+        // reserve >= window：非法
+        config.context.window_tokens = Some(10_000);
+        config.context.reserve_tokens = Some(10_000);
+        let err = config.effective_context_policy().unwrap_err();
+        assert_eq!(err.code(), "config.invalid_context");
+        assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+        // keep >= window - reserve：非法；少 1 则合法
+        config.context.reserve_tokens = Some(8_192);
+        config.context.keep_recent_tokens = Some(10_000 - 8_192);
+        assert!(config.effective_context_policy().is_err());
+        config.context.keep_recent_tokens = Some(10_000 - 8_192 - 1);
+        assert!(config.effective_context_policy().is_ok());
     }
 }

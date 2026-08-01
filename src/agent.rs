@@ -4,7 +4,6 @@ use crate::context::{
 use crate::shared::constants;
 use crate::shared::error::{ErrorKind, TogiError};
 use futures::StreamExt;
-use itertools::Itertools;
 use rig::OneOrMany;
 use rig::agent::{
     AgentHook, CompletionCallAction, CompletionCallEvent, HookContext, MultiTurnStreamItem,
@@ -661,6 +660,7 @@ async fn stream_once<M: CompletionModel + 'static>(
                         ToolResultContent::Text(t) => Some(t.text.as_str()),
                         _ => None,
                     })
+                    .collect::<Vec<_>>()
                     .join("\n");
                 tracing::debug!(call_id = %internal_call_id, result_len = text.len(), "tool result");
                 let _ = tx.send(AgentEvent::ToolResult {
@@ -744,6 +744,7 @@ async fn summarize<M: CompletionModel>(
             AssistantContent::Text(t) => Some(t.text.as_str()),
             _ => None,
         })
+        .collect::<Vec<_>>()
         .join("\n");
     let text = text.trim().to_string();
     if text.is_empty() {

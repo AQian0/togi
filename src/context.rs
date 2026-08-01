@@ -49,12 +49,6 @@ impl ContextCheckpoint {
     pub fn is_empty(&self) -> bool {
         self.summary.is_none() && self.covered_messages == 0
     }
-
-    /// 对给定长度的历史是否仍然有效：加载截断（不可解码行）后
-    /// `covered_messages` 可能越过历史末尾，此时 checkpoint 必须作废。
-    pub fn is_valid_for(&self, message_count: usize) -> bool {
-        self.covered_messages <= message_count
-    }
 }
 
 /// 一次提交所需的上下文输入：未配置窗口时 `policy` 为 None，管理关闭。

@@ -13,9 +13,7 @@ use std::io;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) struct TerminalModeGuard {
-    active: bool,
-}
+pub(crate) struct TerminalModeGuard;
 
 impl TerminalModeGuard {
     pub(crate) fn activate() -> io::Result<Self> {
@@ -29,26 +27,18 @@ impl TerminalModeGuard {
             let _ = disable_raw_mode();
             return Err(err);
         }
-        Ok(Self { active: true })
+        Ok(Self)
     }
+}
 
-    fn restore(&mut self) {
-        if !self.active {
-            return;
-        }
+impl Drop for TerminalModeGuard {
+    fn drop(&mut self) {
         let _ = execute!(
             io::stdout(),
             ratatui::crossterm::event::DisableBracketedPaste
         );
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         let _ = disable_raw_mode();
-        self.active = false;
-    }
-}
-
-impl Drop for TerminalModeGuard {
-    fn drop(&mut self) {
-        self.restore();
     }
 }
 

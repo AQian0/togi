@@ -263,14 +263,16 @@ impl Tool for Read {
                 .limit_bytes
                 .unwrap_or(constants::DEFAULT_MAX_READ_BYTES)
                 .min(remaining_bytes);
-            let streaming_encoding = requested_text_encoding.or_else(|| {
-                if offset_bytes == 0 {
-                    crate::shared::text_encoding::encoding_for_bom(&head)
-                        .map(|(encoding, _)| encoding)
-                } else {
-                    None
-                }
-            });
+            let bom = if offset_bytes == 0 {
+                crate::shared::text_encoding::encoding_for_bom(&head)
+            } else {
+                None
+            };
+            let streaming_encoding = requested_text_encoding.or(bom.map(|(e, _)| e));
+            // BOM 字节不属于文本内容，读取时跳过（head 已探测过，不再开文件）。
+            let bom_skip = bom
+                .filter(|(e, _)| streaming_encoding.is_some_and(|s| std::ptr::eq(*e, s)))
+                .map_or(0, |(_, len)| len as u64);
             return text::read_streaming(
                 &path,
                 &display,
@@ -278,6 +280,7 @@ impl Tool for Read {
                 offset_bytes,
                 limit,
                 streaming_encoding,
+                bom_skip,
             )
             .await;
         }

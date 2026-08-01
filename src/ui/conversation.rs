@@ -31,7 +31,7 @@ enum ConvItem {
 
 #[derive(Clone)]
 struct ConvLine {
-    spans: Vec<(String, Style)>,
+    span: Option<(String, Style)>,
     align: Align,
     block: Option<BlockStyle>,
 }
@@ -44,7 +44,7 @@ pub(crate) struct MarkdownRenderResult {
 impl ConvLine {
     fn block(text: impl Into<String>, style: Style, block: BlockStyle) -> Self {
         Self {
-            spans: vec![(text.into(), style)],
+            span: Some((text.into(), style)),
             align: Align::Left,
             block: Some(block),
         }
@@ -52,7 +52,7 @@ impl ConvLine {
 
     fn empty() -> Self {
         Self {
-            spans: Vec::new(),
+            span: None,
             align: Align::Left,
             block: None,
         }
@@ -60,7 +60,7 @@ impl ConvLine {
 
     fn to_ratatui_line(&self) -> Line<'static> {
         Line::from(
-            self.spans
+            self.span
                 .iter()
                 .map(|(t, s)| Span::styled(t.clone(), *s))
                 .collect::<Vec<_>>(),
@@ -197,18 +197,15 @@ impl Conversation {
         self.md_block = None;
         self.items.push(ConvItem::Line(ConvLine::empty()));
         let user_style = style::user_block();
-        let blk = BlockStyle {
-            gutter: style::gutter_of(user_style),
-            bg: user_style.bg,
-        };
+        let blk = block_of(user_style);
         self.items.push(ConvItem::Line(ConvLine {
-            spans: vec![(crate::t!("conv-user-label"), user_style)],
+            span: Some((crate::t!("conv-user-label"), user_style)),
             align: Align::Right,
             block: Some(blk),
         }));
         let text_style = user_style.fg(Color::Black);
         self.items.push(ConvItem::Line(ConvLine {
-            spans: vec![(text.to_string(), text_style)],
+            span: Some((text.to_string(), text_style)),
             align: Align::Right,
             block: Some(blk),
         }));

@@ -244,15 +244,11 @@ fn build_syntect_theme() -> Theme {
     scopes.push(item("meta.diff.header", c.lavender, None));
 
     Theme {
-        name: Some(format!("Catppuccin {}", theme::flavor().name())),
-        author: Some("Catppuccin".into()),
+        name: None,
+        author: None,
         settings: syntect::highlighting::ThemeSettings {
             background: Some(syn_c(c.base)),
             foreground: Some(syn_c(c.text)),
-            caret: Some(syn_c(c.lavender)),
-            line_highlight: Some(syn_c(c.surface0)),
-            selection: Some(syn_c(c.surface1)),
-            misspelling: Some(syn_c(c.red)),
             ..Default::default()
         },
         scopes,
@@ -306,7 +302,6 @@ mod tests {
             palette.crust,
             palette.surface0,
             palette.surface1,
-            palette.surface2,
         ];
         let blocks = [
             ("user", user_block()),

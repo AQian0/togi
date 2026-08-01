@@ -18,15 +18,6 @@ pub enum CatppuccinFlavor {
 }
 
 impl CatppuccinFlavor {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Latte => "Latte",
-            Self::Frappe => "Frappe",
-            Self::Macchiato => "Macchiato",
-            Self::Mocha => "Mocha",
-        }
-    }
-
     pub fn colors(&self) -> &'static CatppuccinColors {
         match self {
             Self::Latte => &LATTE,
@@ -52,7 +43,6 @@ pub struct CatppuccinColors {
     pub subtext0: Color,
     pub overlay1: Color,
     pub overlay0: Color,
-    pub surface2: Color,
     pub surface1: Color,
     pub surface0: Color,
     pub base: Color,
@@ -82,7 +72,6 @@ static LATTE: LazyLock<CatppuccinColors> = LazyLock::new(|| CatppuccinColors {
     subtext0: cp("6c6f85"),
     overlay1: cp("8c8fa1"),
     overlay0: cp("9ca0b0"),
-    surface2: cp("acb0be"),
     surface1: cp("bcc0cc"),
     surface0: cp("ccd0da"),
     base: cp("eff1f5"),
@@ -105,7 +94,6 @@ static FRAPPE: LazyLock<CatppuccinColors> = LazyLock::new(|| CatppuccinColors {
     subtext0: cp("a5adce"),
     overlay1: cp("838ba7"),
     overlay0: cp("737994"),
-    surface2: cp("626880"),
     surface1: cp("51576d"),
     surface0: cp("414559"),
     base: cp("303446"),
@@ -128,7 +116,6 @@ static MACCHIATO: LazyLock<CatppuccinColors> = LazyLock::new(|| CatppuccinColors
     subtext0: cp("a5adcb"),
     overlay1: cp("8087a2"),
     overlay0: cp("6e738d"),
-    surface2: cp("5b6078"),
     surface1: cp("494d64"),
     surface0: cp("363a4f"),
     base: cp("24273a"),
@@ -151,7 +138,6 @@ static MOCHA: LazyLock<CatppuccinColors> = LazyLock::new(|| CatppuccinColors {
     subtext0: cp("a6adc8"),
     overlay1: cp("7f849c"),
     overlay0: cp("6c7086"),
-    surface2: cp("585b70"),
     surface1: cp("45475a"),
     surface0: cp("313244"),
     base: cp("1e1e2e"),

@@ -10,7 +10,7 @@ pub(super) async fn read_limited<R>(reader: R, cap: usize) -> StreamCapture
 where
     R: AsyncRead + Unpin,
 {
-    let mut reader = tokio::io::BufReader::new(reader);
+    let mut reader = reader;
     let mut buf = [0u8; constants::SHELL_READ_BUFFER_SIZE];
     let mut data = Vec::with_capacity(cap.min(constants::SHELL_READ_BUFFER_SIZE));
     let mut total = 0usize;

@@ -1,6 +1,6 @@
 use crate::context::ContextCheckpoint;
 use crate::shared::error::TogiError;
-use crate::store::{HistoryStore, SessionMeta};
+use crate::store::HistoryStore;
 use crate::ui::OutputItem;
 use rig::message::Message;
 use std::sync::Arc;
@@ -145,19 +145,13 @@ pub async fn handle_command(
                     }
                     // 加载目标会话历史
                     match store.load(&target_sid).await {
-                        Ok(report) => {
-                            let count = report.messages.len();
-                            let dropped = report.dropped_rows;
-                            *history.write().await = Arc::from(report.messages);
+                        Ok(messages) => {
+                            let count = messages.len();
+                            *history.write().await = Arc::from(messages);
                             *session_id.write().await = target_sid.clone();
                             match store.load_context(&target_sid).await {
                                 Ok(checkpoint) => {
-                                    // 加载截断可能使 checkpoint 越过历史末尾，作废重建。
-                                    *context.write().await = if checkpoint.is_valid_for(count) {
-                                        checkpoint
-                                    } else {
-                                        ContextCheckpoint::default()
-                                    };
+                                    *context.write().await = checkpoint;
                                 }
                                 Err(err) => {
                                     *context.write().await = ContextCheckpoint::default();
@@ -174,12 +168,6 @@ pub async fn handle_command(
                                 &tx,
                                 &crate::t!("builtins-switch-done", id = target_sid, count = count),
                             );
-                            if dropped > 0 {
-                                send_notice(
-                                    &tx,
-                                    &crate::t!("store-history-truncated", dropped = dropped),
-                                );
-                            }
                         }
                         Err(err) => {
                             send_notice(
@@ -270,40 +258,25 @@ pub async fn handle_command(
 
 /// 将会话编号（1-based）或会话 ID 解析为实际会话 ID。
 async fn resolve_session_id(store: &Arc<HistoryStore>, arg: &str) -> Result<String, String> {
-    // 如果是纯数字，按编号解析
+    let sessions = store
+        .list_sessions()
+        .await
+        .map_err(|err| crate::t!("store-query-error", error = err.user_message()))?;
     if let Ok(n) = arg.parse::<usize>() {
-        if n == 0 {
-            return Err(crate::t!("builtins-session-not-found", input = arg));
-        }
-        match store.list_sessions().await {
-            Ok(sessions) => {
-                if let Some(s) = sessions.get(n - 1) {
-                    return Ok(s.id.clone());
-                }
-                return Err(crate::t!("builtins-session-not-found", input = arg));
-            }
-            Err(err) => {
-                return Err(crate::t!("store-query-error", error = err.user_message()));
-            }
-        }
+        return sessions
+            .get(n.wrapping_sub(1))
+            .map(|s| s.id.clone())
+            .ok_or_else(|| crate::t!("builtins-session-not-found", input = arg));
     }
-    // 否则按 ID 解析（支持前缀匹配）
-    match store.list_sessions().await {
-        Ok(sessions) => {
-            // 精确匹配
-            if let Some(s) = sessions.iter().find(|s| s.id == arg) {
-                return Ok(s.id.clone());
-            }
-            // 前缀匹配
-            let matches: Vec<&SessionMeta> =
-                sessions.iter().filter(|s| s.id.starts_with(arg)).collect();
-            match matches.len() {
-                1 => Ok(matches[0].id.clone()),
-                0 => Err(crate::t!("builtins-session-not-found", input = arg)),
-                _ => Err(crate::t!("builtins-session-ambiguous", input = arg)),
-            }
-        }
-        Err(err) => Err(crate::t!("store-query-error", error = err.user_message())),
+    // 精确匹配，否则唯一前缀匹配
+    if let Some(s) = sessions.iter().find(|s| s.id == arg) {
+        return Ok(s.id.clone());
+    }
+    let mut matches = sessions.iter().filter(|s| s.id.starts_with(arg));
+    match (matches.next(), matches.next()) {
+        (Some(s), None) => Ok(s.id.clone()),
+        (None, _) => Err(crate::t!("builtins-session-not-found", input = arg)),
+        _ => Err(crate::t!("builtins-session-ambiguous", input = arg)),
     }
 }
 

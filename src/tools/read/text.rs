@@ -1,4 +1,4 @@
-use super::{Read, ReadError, io};
+use super::{Read, ReadError};
 use crate::shared::util::{format_size, streaming_read_text_with_encoding};
 use std::fmt::Write;
 use std::path::Path;
@@ -25,6 +25,7 @@ pub(super) fn render(content: &str) -> String {
 }
 
 /// 流式读取文本文件（大文件路径），返回渲染后的输出。
+/// `bom_skip`：调用方在探测 head 时已确认的 BOM 字节数，读取时跳过。
 pub(super) async fn read_streaming(
     path: &Path,
     display: &str,
@@ -32,18 +33,11 @@ pub(super) async fn read_streaming(
     offset_bytes: u64,
     limit_bytes: u64,
     encoding: Option<&'static encoding_rs::Encoding>,
+    bom_skip: u64,
 ) -> Result<String, ReadError> {
     let encoding = encoding.unwrap_or(encoding_rs::UTF_8);
-    let mut effective_offset = offset_bytes;
-    if offset_bytes == 0
-        && let Ok(head) = io::read_chunk(path, 0, 4).await
-        && let Some((bom_encoding, bom_len)) = crate::shared::text_encoding::encoding_for_bom(&head)
-        && std::ptr::eq(bom_encoding, encoding)
-    {
-        effective_offset = bom_len as u64;
-    }
     let (content, _, was_truncated) =
-        streaming_read_text_with_encoding(path, effective_offset, limit_bytes, encoding)
+        streaming_read_text_with_encoding(path, offset_bytes + bom_skip, limit_bytes, encoding)
             .await
             .map_err(|source| Read::map_io(source, display.to_string()))?;
 

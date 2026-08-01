@@ -52,7 +52,6 @@ pub(super) fn render_hexdump(data: &[u8], max_bytes: usize, base_offset: u64) ->
     out
 }
 
-
 pub(super) struct BinaryReadRequest<'a> {
     pub(super) path: &'a Path,
     pub(super) display: &'a str,
@@ -189,12 +188,5 @@ mod tests {
             out.contains("00001000"),
             "should show base offset 0x1000, got: {out}"
         );
-    }
-
-    #[test]
-    fn base64_encodes() {
-        use base64::Engine;
-        let out = base64::engine::general_purpose::STANDARD.encode(b"hello");
-        assert_eq!(out, "aGVsbG8=");
     }
 }

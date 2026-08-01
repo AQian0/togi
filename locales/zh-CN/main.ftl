@@ -43,7 +43,6 @@ builtins-history-tool-result = [工具结果]
 
 # ── App ──────────────────────────────────────────────────────────────
 app-cancelled = 已取消。
-app-busy = 上一条消息仍在处理中，本次提交已被忽略。
 app-session-error = Session 错误：{ $error }
 app-history-save-error = 无法保存输入历史：{ $error }
 app-context-get-cwd = 获取当前工作目录
@@ -139,7 +138,6 @@ store-load-error = 无法加载对话历史：{ $error }
 store-clear-error = 无法清除已存储的历史：{ $error }
 store-open-error = 无法打开数据库 { $path }：{ $error }
 store-query-error = 数据库查询失败：{ $error }
-store-history-truncated = 已跳过 { $dropped } 条无法读取的历史消息（格式版本不兼容），从可读取的前缀继续。
 store-deserialize-error = 无法反序列化存储的消息：{ $error }
 
 # ── Modify tool output ───────────────────────────────────────────────

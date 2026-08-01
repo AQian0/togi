@@ -29,10 +29,6 @@ impl ApprovalPolicy {
             names.insert(name.to_string());
         });
     }
-
-    fn subscribe(&self) -> watch::Receiver<HashSet<String>> {
-        self.allowed.subscribe()
-    }
 }
 
 impl Default for ApprovalPolicy {
@@ -98,7 +94,7 @@ async fn approval(
         return Err(crate::t!("approval-cancelled", tool = name));
     }
 
-    let mut allow_rx = policy.subscribe();
+    let mut allow_rx = policy.allowed.subscribe();
     if allow_rx.borrow().contains(name) {
         return Ok(());
     }

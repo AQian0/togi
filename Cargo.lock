@@ -8283,7 +8283,6 @@ dependencies = [
  "fluent",
  "futures",
  "http",
- "itertools 0.14.0",
  "libc",
  "pretty_assertions",
  "pulldown-cmark",

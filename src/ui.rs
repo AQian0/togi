@@ -1,10 +1,9 @@
 //! 终端 UI 子系统：对话渲染、工具调用摘要。
 //!
 //! - [`session`]：基于 ratatui 的全屏对话 UI（Session / 流式渲染）。
-//! - [`session`]：Session 生命周期、事件循环、输入输出、帧渲染。
 //! - [`keys`]：按键分发与退出命令识别。
 //! - [`terminal`]：终端模式管理与事件轮询。
-//! - [`editor`]：`ratatui-textarea` 输入编辑器适配层。
+//! - [`editor`]：`ratatui-textarea` 输入框构造。
 //! - [`render`]：帧渲染与 CJK 折行。
 //! - [`summarize`]：工具调用参数的简短摘要，用于对话区展示。
 

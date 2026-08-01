@@ -48,7 +48,7 @@ pub trait ClassifyEffect {
 /// 在构建工具时，通过 [`Self::register`] 将每个工具的分类函数登记到表中。
 /// 运行时通过 [`Self::classify`] 按名称查找并调用对应的分类器。
 /// 未知名称默认返回 [`ToolEffect::Mutating`]（安全保守策略）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolRegistry {
     classifiers: HashMap<&'static str, fn(&Value) -> ToolEffect>,
 }
@@ -57,9 +57,7 @@ impl ToolRegistry {
     /// 创建一个空的注册表。
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            classifiers: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// 注册一个工具类型。调用后将工具的 [`ClassifyEffect::classify`] 函数
@@ -75,12 +73,6 @@ impl ToolRegistry {
             .get(name)
             .map(|f| f(args))
             .unwrap_or(ToolEffect::Mutating)
-    }
-}
-
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

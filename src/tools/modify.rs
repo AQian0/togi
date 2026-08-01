@@ -66,7 +66,7 @@ pub struct ModifyArgs {
     /// When `true`, compute and return the diff without actually modifying the
     /// file. Defaults to `false`.
     #[serde(default)]
-    dry_run: Option<bool>,
+    dry_run: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -378,7 +378,7 @@ impl Tool for Modify {
         let raw_path = Self::resolve(args.cwd.as_deref(), &args.path)?;
         let path = Self::resolve_symlinks(&raw_path).await?;
         let display = raw_path.display().to_string();
-        let dry_run = args.dry_run.unwrap_or(false);
+        let dry_run = args.dry_run;
         let text_encoding = args
             .encoding
             .as_deref()

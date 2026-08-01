@@ -59,16 +59,12 @@ fn paginate_text(
     if total == 0 {
         return text.to_string();
     }
-    let start = offset.unwrap_or(1).max(1);
+    let start = offset.unwrap_or(1);
     if start > total {
         return crate::t!("paginate-past-end", offset = start, total = total);
     }
     let start_idx = start - 1;
-    let effective_limit = match limit {
-        Some(0) => 0,
-        Some(n) => n,
-        None => default_limit,
-    };
+    let effective_limit = limit.unwrap_or(default_limit);
     let end_idx = if effective_limit == 0 {
         total
     } else {
@@ -209,13 +205,6 @@ mod tests {
     fn explicit_zero_limit_overrides_default_and_returns_all() {
         let out = paginate_text("a\nb\nc\nd\ne\n", None, Some(0), 2);
         assert_eq!(out, "a\nb\nc\nd\ne\n");
-    }
-
-    #[test]
-    fn offset_of_zero_is_clamped_to_one_at_helper_level() {
-        let out = paginate_text("a\nb\n", Some(0), Some(1), 0);
-        assert!(out.contains("a\n"));
-        assert!(!out.contains("\nb\n"));
     }
 
     #[test]

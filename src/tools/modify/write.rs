@@ -28,6 +28,27 @@ fn action_word(existed: bool, past: bool) -> String {
     crate::t!(key)
 }
 
+/// 新内容对旧内容的 unified diff；无旧内容（新文件）时从 `/dev/null` 起 diff。
+async fn diff_against_old(
+    old_text: Option<String>,
+    content: &str,
+    display: &str,
+) -> Result<Option<String>, ModifyError> {
+    let old_label = if old_text.is_some() {
+        display
+    } else {
+        "/dev/null"
+    };
+    unified_diff_blocking(
+        old_text.unwrap_or_default(),
+        content.to_string(),
+        old_label.to_string(),
+        display.to_string(),
+        constants::DIFF_CONTEXT,
+    )
+    .await
+}
+
 pub(super) async fn write_text_file(
     path: &Path,
     display: &str,
@@ -102,28 +123,7 @@ pub(super) async fn write_text_file(
                 )
             ));
         }
-        let diff = match old_text {
-            Some(old) => {
-                unified_diff_blocking(
-                    old,
-                    content.to_string(),
-                    display.to_string(),
-                    display.to_string(),
-                    constants::DIFF_CONTEXT,
-                )
-                .await?
-            }
-            None => {
-                unified_diff_blocking(
-                    String::new(),
-                    content.to_string(),
-                    "/dev/null".to_string(),
-                    display.to_string(),
-                    constants::DIFF_CONTEXT,
-                )
-                .await?
-            }
-        };
+        let diff = diff_against_old(old_text, content, display).await?;
         return Ok(dry_run_output(action_word(existed, false), display, diff));
     }
 
@@ -162,30 +162,8 @@ pub(super) async fn write_text_file(
         lines = lines
     );
 
-    let diff = if mtime_ok {
-        match old_text {
-            Some(old) => {
-                unified_diff_blocking(
-                    old,
-                    content.to_string(),
-                    display.to_string(),
-                    display.to_string(),
-                    constants::DIFF_CONTEXT,
-                )
-                .await?
-            }
-            None if !existed => {
-                unified_diff_blocking(
-                    String::new(),
-                    content.to_string(),
-                    "/dev/null".to_string(),
-                    display.to_string(),
-                    constants::DIFF_CONTEXT,
-                )
-                .await?
-            }
-            None => None,
-        }
+    let diff = if mtime_ok && (old_text.is_some() || !existed) {
+        diff_against_old(old_text, content, display).await?
     } else {
         None
     };

@@ -43,7 +43,6 @@ builtins-history-tool-result = [tool result]
 
 # ── App ──────────────────────────────────────────────────────────────
 app-cancelled = Cancelled.
-app-busy = Previous message is still being processed; this submission was ignored.
 app-session-error = Session error: { $error }
 app-history-save-error = Could not save input history: { $error }
 app-context-get-cwd = get current working directory
@@ -139,7 +138,6 @@ store-load-error = Could not load conversation history: { $error }
 store-clear-error = Could not clear stored history: { $error }
 store-open-error = Could not open database { $path }: { $error }
 store-query-error = Database query failed: { $error }
-store-history-truncated = Skipped { $dropped } unreadable history message(s) (incompatible format version); continuing from the readable prefix.
 store-deserialize-error = Could not deserialize stored message: { $error }
 
 # ── Modify tool output ───────────────────────────────────────────────

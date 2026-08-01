@@ -82,16 +82,16 @@ fn to_output_at(
             depth,
             response,
         },
-        AgentEvent::Notice(text) => OutputItem::Notice(indent(text, depth, "↳ ")),
+        AgentEvent::Notice(text) => OutputItem::Notice(indent(text, depth)),
     }
 }
 
 /// 子代理事件的文本缩进：depth 1 → `↳ x`，depth 2 → `  ↳ x`。
-fn indent(text: String, depth: u32, marker: &str) -> String {
+fn indent(text: String, depth: u32) -> String {
     if depth == 0 {
         text
     } else {
-        format!("{}{marker}{text}", "  ".repeat(depth as usize - 1))
+        format!("{}↳ {text}", "  ".repeat(depth as usize - 1))
     }
 }
 

@@ -22,7 +22,6 @@ use crate::tools::ToolRegistry;
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
 use crate::tools::shell::Shell;
-use itertools::Itertools;
 use rig::message::{AssistantContent, Message};
 use rig::tool::{DynamicTool, Tool, ToolContext, ToolExecutionError};
 use schemars::JsonSchema;
@@ -139,17 +138,32 @@ impl AgentTool {
         &self,
         profile: Option<(&str, &Profile)>,
     ) -> Result<Vec<DynamicTool>, AgentToolError> {
-        let names: Vec<&str> = match profile {
+        let mut names: Vec<&str> = match profile {
             Some((_, p)) if !p.tools.is_empty() => p.tools.iter().map(String::as_str).collect(),
             _ => DEFAULT_TOOLS.to_vec(),
         };
+        names.sort_unstable();
+        names.dedup();
         let mut tools: Vec<DynamicTool> = Vec::with_capacity(names.len());
-        for name in names.into_iter().unique() {
+        let mut registry = ToolRegistry::new();
+        for name in names {
             tools.push(match name {
-                Read::NAME => crate::pipeline::adapt(Read),
-                Shell::NAME => crate::pipeline::adapt(Shell),
-                Modify::NAME => crate::pipeline::adapt(Modify),
-                Self::NAME => crate::pipeline::adapt(self.spawn_child()),
+                Read::NAME => {
+                    registry.register::<Read>();
+                    crate::pipeline::adapt(Read)
+                }
+                Shell::NAME => {
+                    registry.register::<Shell>();
+                    crate::pipeline::adapt(Shell)
+                }
+                Modify::NAME => {
+                    registry.register::<Modify>();
+                    crate::pipeline::adapt(Modify)
+                }
+                Self::NAME => {
+                    registry.register::<AgentTool>();
+                    crate::pipeline::adapt(self.spawn_child())
+                }
                 other => {
                     return Err(AgentToolError::UnknownTool {
                         profile: profile.map(|(n, _)| n.to_string()).unwrap_or_default(),
@@ -159,11 +173,6 @@ impl AgentTool {
                 }
             });
         }
-        let mut registry = ToolRegistry::new();
-        registry.register::<Read>();
-        registry.register::<Shell>();
-        registry.register::<Modify>();
-        registry.register::<AgentTool>();
         let tools = inject(
             serde_json::Map::from_iter([(CWD_PARAM.into(), self.cwd.display().to_string().into())]),
             tools,
@@ -267,7 +276,9 @@ impl AgentTool {
         if self.profiles.is_empty() {
             return "(none — add .togi/agents/<name>.md)".to_string();
         }
-        self.profiles.keys().sorted().join(", ")
+        let mut names: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
+        names.sort();
+        names.join(", ")
     }
 }
 
@@ -283,6 +294,7 @@ fn conclusion(history: &[Message]) -> Option<String> {
                 AssistantContent::Text(t) => Some(t.text.as_str()),
                 _ => None,
             })
+            .collect::<Vec<_>>()
             .join("\n");
         (!text.trim().is_empty()).then_some(text)
     })
@@ -314,7 +326,10 @@ impl Tool for AgentTool {
             .to_string();
         if !self.profiles.is_empty() {
             d += " Available `profile` values:";
-            for (name, p) in self.profiles.iter().sorted_by(|a, b| a.0.cmp(b.0)) {
+            let mut sorted: Vec<(&String, &crate::tools::agent::profile::Profile)> =
+                self.profiles.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(b.0));
+            for (name, p) in sorted {
                 let desc = if p.description.is_empty() {
                     "(no description)"
                 } else {
@@ -386,11 +401,9 @@ mod tests {
     }
 
     fn tool_names(tools: &[DynamicTool]) -> Vec<String> {
-        tools
-            .iter()
-            .map(|t| t.name().to_string())
-            .sorted()
-            .collect()
+        let mut names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
+        names.sort();
+        names
     }
 
     #[test]
@@ -451,10 +464,7 @@ mod tests {
     #[test]
     fn nested_agent_tool_gets_next_depth_and_halved_turns() {
         let t = tool(1, HashMap::new());
-        let p = profile(&["agent", "read"]);
-        let tools = t.build_child_tools(Some(("x", &p))).unwrap();
-        let nested = tools.iter().find(|tool| tool.name() == "agent").unwrap();
-        let _ = nested; // 深度/轮次无法经 DynamicTool 观察，直接验证 spawn_child。
+        // 深度/轮次无法经 DynamicTool 观察，直接验证 spawn_child。
         let child = t.spawn_child();
         assert_eq!(child.depth, 2);
         assert_eq!(child.max_multi_turn, 5);

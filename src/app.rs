@@ -22,7 +22,6 @@ use rig::tool::DynamicTool;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{RwLock, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -41,27 +40,13 @@ struct AppController {
     registry: Arc<ToolRegistry>,
     cancel_tx: watch::Sender<bool>,
     task_cancel: CancellationToken,
-    submitting: Arc<AtomicBool>,
 }
 
 impl AppController {
     fn spawn_submission(&self, message: String, tx: UiSender) {
-        // 防御深度：UI 层已用 Session::submitting 串行化提交，此处兜底——
-        // 防止未来绕过 UI 的调用路径导致两个 handle_submission 并发竞争
-        // history / session_id。
-        // ponytail: 若 handle_submission panic，Done 与原子位同时卡住，
-        // 会话本已不可用，故不做 panic 安全复位。
-        if self.submitting.swap(true, Ordering::AcqRel) {
-            let _ = tx.send(OutputItem::Notice(crate::t!("app-busy")));
-            // 必须补发 Done：UI 在 Enter 时已置 submitting=true，靠 Done 复位。
-            let _ = tx.send(OutputItem::Done);
-            return;
-        }
         let this = self.clone();
         tokio::spawn(async move {
-            let submitting = Arc::clone(&this.submitting);
             this.handle_submission(message, tx).await;
-            submitting.store(false, Ordering::Release);
         });
     }
 
@@ -274,27 +259,20 @@ fn build_agent(
     tools: Vec<DynamicTool>,
 ) -> crate::shared::error::Result<DynamicAgent> {
     let model_name = args.model.as_ref().or(config.system.model.as_ref());
-    let api_key = args.api_key.as_deref();
-    let preamble = config.effective_preamble();
-    if let Some(model_name) = model_name {
-        DynamicAgent::build(
-            model_name,
-            preamble,
-            tools,
-            api_key,
-            config.effective_max_multi_turn(),
-        )
-        .map_err(Into::into)
-    } else {
-        DynamicAgent::build(
-            DEEPSEEK_V4_PRO,
-            preamble,
-            tools,
-            api_key,
-            config.effective_max_multi_turn(),
-        )
-        .map_err(|source| crate::shared::error::AppError::DefaultModelInit { source })
-    }
+    DynamicAgent::build(
+        model_name.map_or(DEEPSEEK_V4_PRO, String::as_str),
+        config.effective_preamble(),
+        tools,
+        args.api_key.as_deref(),
+        config.effective_max_multi_turn(),
+    )
+    .map_err(|source| {
+        if model_name.is_some() {
+            source.into()
+        } else {
+            crate::shared::error::AppError::DefaultModelInit { source }
+        }
+    })
 }
 
 /// 初始化持久化存储并恢复上次会话的历史记录与上下文 checkpoint。
@@ -316,20 +294,14 @@ async fn init_history() -> (
         Ok(store) => {
             let store = Arc::new(store);
             let sid = session_id.read().await.clone();
-            let report = store.load(&sid).await.unwrap_or_else(|err| {
+            let messages = store.load(&sid).await.unwrap_or_else(|err| {
                 eprintln!(
                     "{}",
                     crate::t!("store-load-error", error = err.user_message())
                 );
-                crate::store::LoadReport::default()
+                Vec::new()
             });
-            tracing::debug!(session = %sid, messages = report.messages.len(), dropped = report.dropped_rows, "history loaded");
-            if report.dropped_rows > 0 {
-                eprintln!(
-                    "{}",
-                    crate::t!("store-history-truncated", dropped = report.dropped_rows)
-                );
-            }
+            tracing::debug!(session = %sid, messages = messages.len(), "history loaded");
             let checkpoint = store.load_context(&sid).await.unwrap_or_else(|err| {
                 eprintln!(
                     "{}",
@@ -337,13 +309,7 @@ async fn init_history() -> (
                 );
                 ContextCheckpoint::default()
             });
-            // 加载截断可能使 checkpoint 越过历史末尾，作废重建。
-            let checkpoint = if checkpoint.is_valid_for(report.messages.len()) {
-                checkpoint
-            } else {
-                ContextCheckpoint::default()
-            };
-            let history = Arc::new(RwLock::new(Arc::from(report.messages)));
+            let history = Arc::new(RwLock::new(Arc::from(messages)));
             (
                 history,
                 Some(store),
@@ -405,7 +371,6 @@ pub async fn run() -> crate::shared::error::Result<()> {
         registry: Arc::new(registry),
         cancel_tx: session.cancel_sender(),
         task_cancel: global_cancel.clone(),
-        submitting: Arc::new(AtomicBool::new(false)),
     };
     let result = session
         .run(

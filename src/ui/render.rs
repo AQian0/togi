@@ -5,37 +5,33 @@
 
 use crate::shared::constants;
 use crate::ui::conversation::{Align, BlockStyle};
-use crate::ui::editor::Editor;
 use crate::ui::menu::Menu;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui_textarea::TextArea;
 use tui_widgets::scrollview::{ScrollView, ScrollViewState};
 
 const GUTTER_MARK: &str = "▎ ";
 
-/// 计算一组 Span 的总显示宽度。
-fn spans_display_width(spans: &[Span]) -> usize {
-    spans
-        .iter()
-        .flat_map(|s| s.content.chars())
-        .map(display_width)
-        .sum()
+/// 一组 Span 的总显示宽度（与拼成 `Line` 后的 `Line::width()` 一致）。
+fn spans_width(spans: &[Span]) -> usize {
+    spans.iter().map(|s| s.width()).sum()
 }
 
 /// 计算单个字符在终端中占用的列宽。
 ///
 /// 控制字符和零宽字符占 0 列，CJK 等宽字符占 2 列，其余占 1 列。
-pub fn display_width(c: char) -> usize {
+pub(crate) fn display_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
 /// 按显示宽度折行。
 ///
 /// 跨 CJK 友好，保留每段 span 的样式，并会切开超长 URL/代码行等单个 span。
-pub fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+pub(crate) fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     if width == 0 || line.spans.is_empty() {
         return vec![Line::from("")];
     }
@@ -106,10 +102,8 @@ fn block_gutter_span(block: BlockStyle) -> Span<'static> {
 pub(crate) struct FrameRenderState<'a> {
     pub(crate) scroll_view: &'a ScrollView,
     pub(crate) conv_state: &'a mut ScrollViewState,
-    pub(crate) editor: &'a Editor,
+    pub(crate) editor: &'a TextArea<'static>,
     pub(crate) menu: &'a mut Menu,
-    pub(crate) separator_style: Style,
-    pub(crate) dim_style: Style,
 }
 
 /// 将原始对话行（含对齐与块样式）展开为全宽度的最终显示行（已折行、已上色）。
@@ -134,7 +128,7 @@ pub(crate) fn build_display_lines(
                     conv_width.saturating_sub(constants::USER_MARGIN as u16) as usize;
                 let re_wrapped = wrap_line(&wline, effective_width.max(1));
                 for rline in re_wrapped {
-                    let dw: usize = spans_display_width(&rline.spans);
+                    let dw: usize = rline.width();
                     let mut spans: Vec<Span> = Vec::new();
                     if let Some(bs) = gutter {
                         spans.push(block_gutter_span(bs));
@@ -156,7 +150,7 @@ pub(crate) fn build_display_lines(
                     }));
                     if let Some(bg_color) = block_bg {
                         let full_width = conv_width as usize;
-                        let current_w: usize = spans_display_width(&spans);
+                        let current_w: usize = spans_width(&spans);
                         if current_w < full_width {
                             spans.push(Span::styled(
                                 " ".repeat(full_width - current_w),
@@ -177,7 +171,7 @@ pub(crate) fn build_display_lines(
                 }));
                 if let Some(bg_color) = block_bg {
                     let full_width = conv_width as usize;
-                    let current_w: usize = spans_display_width(&spans);
+                    let current_w: usize = spans_width(&spans);
                     if current_w < full_width {
                         spans.push(Span::styled(
                             " ".repeat(full_width - current_w),
@@ -198,8 +192,6 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
         conv_state,
         editor,
         menu,
-        separator_style,
-        dim_style,
     } = state;
     let area = frame.area();
     if area.width < constants::MIN_TERMINAL_WIDTH || area.height < constants::MIN_TERMINAL_HEIGHT {
@@ -211,7 +203,6 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
     );
 
     let input_rows = editor
-        .textarea
         .lines()
         .iter()
         .map(|line| wrap_line(&Line::from(line.as_str()), area.width as usize).len())
@@ -249,7 +240,7 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     crate::t!("render-scroll-indicator"),
-                    dim_style,
+                    crate::ui::style::dim(),
                 )))
                 .style(crate::ui::style::app_background()),
                 area,
@@ -265,7 +256,7 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
     let sep_rect = Rect::new(input_area.x, input_area.y, input_area.width, 1);
     let sep = format!("{:─<width$}", "", width = sep_rect.width as usize);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(sep, separator_style))),
+        Paragraph::new(Line::from(Span::styled(sep, crate::ui::style::separator()))),
         sep_rect,
     );
 
@@ -276,7 +267,7 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
         input_area.height.saturating_sub(2),
     );
     if edit_area.height > 0 && edit_area.width > 0 {
-        frame.render_widget(&editor.textarea, edit_area);
+        frame.render_widget(editor, edit_area);
     }
 
     let bottom_sep_y = input_area.y + input_area.height.saturating_sub(1);
@@ -284,7 +275,7 @@ pub(crate) fn render_frame(frame: &mut Frame, state: FrameRenderState<'_>) {
         let bottom_rect = Rect::new(input_area.x, bottom_sep_y, input_area.width, 1);
         let sep = format!("{:─<width$}", "", width = bottom_rect.width as usize);
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(sep, separator_style))),
+            Paragraph::new(Line::from(Span::styled(sep, crate::ui::style::separator()))),
             bottom_rect,
         );
     }
@@ -341,7 +332,7 @@ mod tests {
         let view_area = view.area();
         view.render_widget(Paragraph::new(lines), view_area);
 
-        let editor = Editor::new();
+        let editor = crate::ui::editor::make_textarea("");
         let mut menu = Menu::new();
         let mut state = ScrollViewState::new();
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
@@ -355,8 +346,6 @@ mod tests {
                             conv_state: state,
                             editor: &editor,
                             menu: &mut menu,
-                            separator_style: Style::default(),
-                            dim_style: Style::default(),
                         },
                     );
                 })

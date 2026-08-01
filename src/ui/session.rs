@@ -8,12 +8,11 @@ use crate::shared::constants;
 use crate::tools::ApprovalDecision;
 use crate::ui::OutputItem;
 use crate::ui::conversation::Conversation;
-use crate::ui::editor::Editor;
+use crate::ui::editor::make_textarea;
 use crate::ui::history::History;
 use crate::ui::keys::Action;
 use crate::ui::menu::Menu;
 use crate::ui::render;
-use crate::ui::style;
 use crate::ui::terminal::{EventPump, TerminalModeGuard};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseEventKind};
@@ -37,7 +36,7 @@ pub struct Session {
     // RAII：Drop 时恢复终端模式，从不读取。
     _terminal_mode: TerminalModeGuard,
     pub(crate) conv: Conversation,
-    pub(crate) editor: Editor,
+    pub(crate) editor: ratatui_textarea::TextArea<'static>,
     pub(crate) history: History,
     pub(crate) submitting: bool,
     pub(crate) conv_scroll: ScrollViewState,
@@ -63,7 +62,7 @@ impl Session {
             terminal,
             _terminal_mode: terminal_mode,
             conv: Conversation::new(),
-            editor: Editor::new(),
+            editor: make_textarea(""),
             history: History::load_default(),
             submitting: false,
             conv_scroll: ScrollViewState::new(),
@@ -213,7 +212,7 @@ impl Session {
             },
             Event::Paste(data) if !self.submitting => {
                 self.detach_history();
-                self.editor.textarea.insert_str(&data);
+                self.editor.insert_str(&data);
             }
             Event::Resize(_, _) => {}
             _ => {}
@@ -235,7 +234,7 @@ impl Session {
         .ok()
         .flatten();
         if let Some(text) = text {
-            self.editor.textarea.insert_str(&text);
+            self.editor.insert_str(&text);
         }
     }
 
@@ -354,8 +353,6 @@ impl Session {
                     conv_state: conv_scroll,
                     editor,
                     menu,
-                    separator_style: style::separator(),
-                    dim_style: style::dim(),
                 },
             );
         })?;
@@ -367,14 +364,14 @@ impl Session {
     }
 
     pub(crate) fn history_prev(&mut self) {
-        if let Some(entry) = self.history.previous(self.editor.text()) {
-            self.editor.set_text(&entry);
+        if let Some(entry) = self.history.previous(self.editor.lines().join("\n")) {
+            self.editor = make_textarea(&entry);
         }
     }
 
     pub(crate) fn history_next(&mut self) {
         if let Some(entry) = self.history.next() {
-            self.editor.set_text(&entry);
+            self.editor = make_textarea(&entry);
         }
     }
 

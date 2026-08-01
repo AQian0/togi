@@ -2,7 +2,6 @@ use super::{Modify, ModifyError};
 use crate::shared::constants;
 use crate::shared::text_encoding::{decode_text, encode_text};
 use crate::shared::util::append_diff;
-use itertools::Itertools;
 use similar::{DiffOp, TextDiff};
 use std::path::Path;
 use tokio::io::AsyncReadExt;
@@ -226,7 +225,8 @@ pub(super) fn apply_edits(
         spans.push((start, start + old.len(), new.as_str()));
     }
     spans.sort_by_key(|(start, _, _)| *start);
-    for (prev, next) in spans.iter().tuple_windows() {
+    for pair in spans.windows(2) {
+        let [prev, next] = pair else { unreachable!() };
         if prev.1 > next.0 {
             return Err(ModifyError::OverlappingEdits {
                 path: display.to_string(),

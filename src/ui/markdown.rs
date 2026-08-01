@@ -1,6 +1,6 @@
 //! 基于 pulldown-cmark 的 Markdown → ratatui Line 渲染器。
 //!
-//! 产出的 Line 未经折行——调用方应使用 interaction 模块的 wrap_line() 做 CJK 友好的折行。
+//! 产出的 Line 未经折行——调用方应使用 render 模块的 wrap_line() 做 CJK 友好的折行。
 //! 代码块通过 syntect 做语法高亮。
 use crate::ui::style;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -28,28 +28,13 @@ fn render_code_block(lang: &str, raw_lines: &[String]) -> Vec<Line<'static>> {
     let mut hl = syntax.map(|s| syntect::easy::HighlightLines::new(s, theme));
     for &line_text in lines {
         if let Some(hl) = hl.as_mut() {
-            let mut spans: Vec<Span<'static>> = Vec::new();
+            let mut spans: Vec<Span<'static>> = vec![Span::styled("  ", style::md_code_block())];
             if let Ok(regions) = hl.highlight_line(line_text, style::syntax_set()) {
-                let mut first = true;
-                for (style, text) in regions {
-                    if first {
-                        first = false;
-                        spans.push(Span::styled(
-                            format!("  {text}"),
-                            style::syntect_to_ratatui(style),
-                        ));
-                    } else {
-                        spans.push(Span::styled(
-                            text.to_string(),
-                            style::syntect_to_ratatui(style),
-                        ));
-                    }
-                }
+                spans.extend(regions.into_iter().map(|(region_style, text)| {
+                    Span::styled(text.to_string(), style::syntect_to_ratatui(region_style))
+                }));
             } else {
-                spans.push(Span::styled(
-                    format!("  {line_text}"),
-                    style::md_code_block(),
-                ));
+                spans.push(Span::styled(line_text.to_string(), style::md_code_block()));
             }
             out.push(Line::from(spans));
         } else {
@@ -69,7 +54,10 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
     if text.trim().is_empty() {
         return vec![];
     }
-    let parser = Parser::new_ext(text, Options::all());
+    let parser = Parser::new_ext(
+        text,
+        Options::ENABLE_TASKLISTS | Options::ENABLE_FOOTNOTES | Options::ENABLE_MATH,
+    );
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut style_stack: Vec<Style> = vec![style::md_base()];
@@ -155,18 +143,7 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
                     link_urls.push(dest_url.to_string());
                 }
                 Tag::Strikethrough | Tag::Image { .. } | Tag::MetadataBlock { .. } => {}
-                Tag::Paragraph
-                | Tag::Table(_)
-                | Tag::TableHead
-                | Tag::TableRow
-                | Tag::TableCell
-                | Tag::FootnoteDefinition(_)
-                | Tag::HtmlBlock
-                | Tag::DefinitionList
-                | Tag::DefinitionListTitle
-                | Tag::DefinitionListDefinition
-                | Tag::Superscript
-                | Tag::Subscript => {}
+                _ => {}
             },
             Event::End(tag) => match tag {
                 TagEnd::Heading(_) => {
@@ -202,21 +179,8 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
                         spans.push(Span::styled(format!(" ({url})"), style::dim()));
                     }
                 }
-                TagEnd::Strikethrough
-                | TagEnd::Image
-                | TagEnd::MetadataBlock(_)
-                | TagEnd::FootnoteDefinition
-                | TagEnd::CodeBlock
-                | TagEnd::Table
-                | TagEnd::TableHead
-                | TagEnd::TableRow
-                | TagEnd::TableCell
-                | TagEnd::HtmlBlock
-                | TagEnd::DefinitionList
-                | TagEnd::DefinitionListTitle
-                | TagEnd::DefinitionListDefinition
-                | TagEnd::Superscript
-                | TagEnd::Subscript => {}
+                TagEnd::Strikethrough | TagEnd::Image | TagEnd::MetadataBlock(_) => {}
+                _ => {}
             },
             Event::Text(text) => {
                 let style = current_style(&style_stack);

@@ -81,8 +81,8 @@ impl Session {
         }
 
         if key.code == KeyCode::Char('c') && ctrl {
-            if !self.submitting && self.editor.textarea.is_selecting() {
-                self.editor.textarea.input(key);
+            if !self.submitting && self.editor.is_selecting() {
+                self.editor.input(key);
                 self.last_ctrl_c = None;
                 return (Action::Continue, None);
             }
@@ -128,38 +128,38 @@ impl Session {
         match key.code {
             KeyCode::Enter => {
                 if alt || ctrl || shift {
-                    self.editor.textarea.insert_newline();
-                } else if !self.editor.is_blank() {
-                    let trimmed = self.editor.text().trim().to_string();
+                    self.editor.insert_newline();
+                } else if !self.editor.lines().iter().all(|l| l.trim().is_empty()) {
+                    let trimmed = self.editor.lines().join("\n").trim().to_string();
                     if is_exit_command(&trimmed) {
                         return (Action::Quit, None);
                     }
                     self.conv.push_user_message(&trimmed);
                     self.history.push(trimmed.clone());
-                    self.editor.clear();
+                    self.editor = crate::ui::editor::make_textarea("");
                     self.submitting = true;
                     self.conv_scroll.scroll_to_bottom();
                     return (Action::Submit, Some(trimmed));
                 }
             }
-            KeyCode::Char('j') if ctrl => self.editor.textarea.insert_newline(),
+            KeyCode::Char('j') if ctrl => self.editor.insert_newline(),
             KeyCode::Char('u') if ctrl => {
-                self.editor.textarea.delete_line_by_head();
+                self.editor.delete_line_by_head();
             }
             KeyCode::Char('z' | 'Z') if ctrl && shift => {
-                self.editor.textarea.redo();
+                self.editor.redo();
             }
             KeyCode::Char('z' | 'Z') if ctrl => {
-                self.editor.textarea.undo();
+                self.editor.undo();
             }
             KeyCode::Tab => self.complete_command(),
             KeyCode::Backspace if ctrl || alt => {
-                self.editor.textarea.delete_word();
+                self.editor.delete_word();
             }
             KeyCode::Up | KeyCode::Down if key.modifiers.is_empty() => {
-                let before = self.editor.textarea.cursor();
-                self.editor.textarea.input(key);
-                if self.editor.textarea.cursor() == before {
+                let before = self.editor.cursor();
+                self.editor.input(key);
+                if self.editor.cursor() == before {
                     if key.code == KeyCode::Up {
                         self.history_prev();
                     } else {
@@ -168,7 +168,7 @@ impl Session {
                 }
             }
             _ => {
-                self.editor.textarea.input(key);
+                self.editor.input(key);
             }
         }
         (Action::Continue, None)
@@ -194,20 +194,20 @@ impl Session {
         if let Some(state) = &mut self.tab_completion {
             state.index = (state.index + 1) % state.matches.len();
             let next = state.matches[state.index];
-            self.editor.set_text(next);
+            self.editor = crate::ui::editor::make_textarea(next);
             return;
         }
-        let text = self.editor.text();
+        let text = self.editor.lines().join("\n");
         if !complete::is_command_context(&text) {
-            self.editor.textarea.insert_tab();
+            self.editor.insert_tab();
             return;
         }
         let matches = complete::candidates(&text);
         match matches.len() {
             0 => {}
-            1 => self.editor.set_text(matches[0]),
+            1 => self.editor = crate::ui::editor::make_textarea(matches[0]),
             _ => {
-                self.editor.set_text(matches[0]);
+                self.editor = crate::ui::editor::make_textarea(matches[0]);
                 self.tab_completion = Some(TabCompletion { matches, index: 0 });
             }
         }
