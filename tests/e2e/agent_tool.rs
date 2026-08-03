@@ -54,10 +54,12 @@ async fn agent_tool_runs_subagent_and_returns_conclusion() {
     let conclusion = tool.call_with(args, &mut ctx).await.unwrap();
     assert!(!conclusion.trim().is_empty());
 
-    // 子代理的工具活动应以 Child{depth:1} 形式转发。
+    // 子代理的工具活动应以 Child{depth:1} 形式转发，并带委派标识。
     let mut saw_child_tool_event = false;
     while let Ok(event) = rx.try_recv() {
-        if let AgentEvent::Child { depth: 1, event } = event
+        if let AgentEvent::Child {
+            depth: 1, event, ..
+        } = event
             && matches!(
                 *event,
                 AgentEvent::ToolCall { .. } | AgentEvent::ToolResult { .. }
@@ -67,6 +69,55 @@ async fn agent_tool_runs_subagent_and_returns_conclusion() {
         }
     }
     assert!(saw_child_tool_event, "expected forwarded child tool events");
+}
+
+/// 路线图 §1.2 验收：并行委派——两次调用并发执行，结论各自返回，
+/// 转发的子代理事件带各自标识、互不混淆。
+#[tokio::test]
+#[ignore = "live: needs DEEPSEEK_API_KEY"]
+async fn parallel_agent_calls_return_paired_conclusions() {
+    let dir = fixture_dir();
+    std::fs::write(
+        dir.join("docs/second.txt"),
+        "滚动摘要负责压缩主对话窗口。\n",
+    )
+    .unwrap();
+    let tool = std::sync::Arc::new(crate::support::TestTool::new(togi::pipeline::adapt(
+        AgentTool::new(
+            dir.path(),
+            rig::providers::deepseek::DEEPSEEK_V4_PRO.to_string(),
+            None,
+            10,
+        ),
+    )));
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let run = |task: String| {
+        let tool = std::sync::Arc::clone(&tool);
+        let tx = tx.clone();
+        async move {
+            let (mut ctx, _cancel_tx) = context(tx);
+            let args = serde_json::json!({ "task": task, "profile": "reader" }).to_string();
+            tool.call_with(args, &mut ctx).await
+        }
+    };
+    let (a, b) = tokio::join!(
+        run("读 docs/design.txt，一句话总结 ToolEffect。".into()),
+        run("读 docs/second.txt，一句话总结滚动摘要。".into()),
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert!(!a.trim().is_empty() && !b.trim().is_empty());
+
+    // 两次委派的事件标识不同，且各自成组出现。
+    let mut labels = std::collections::HashSet::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AgentEvent::Child { label, .. } = event {
+            labels.insert(label.to_string());
+        }
+    }
+    assert_eq!(labels.len(), 2, "expected two distinct delegation labels");
+    assert!(labels.iter().any(|l| l.contains("design.txt")));
+    assert!(labels.iter().any(|l| l.contains("second.txt")));
 }
 
 /// 未知 profile 作为工具错误回传给模型（不 panic、不带出进程）。

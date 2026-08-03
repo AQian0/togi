@@ -19,6 +19,10 @@ pub(crate) const MAX_MULTI_TURN_ITERATIONS: u32 = 10;
 /// 一批独立的只读调用（如同时读多个文件）并发后耗时从 sum 降为 max。
 pub(crate) const TOOL_CONCURRENCY: usize = 4;
 
+/// 子代理事件标识（任务摘要）的最大字符数：并行子代理的工具调用行以
+/// `[标识]` 前缀区分归属，过长会淹没工具名。
+pub(crate) const CHILD_LABEL_MAX_CHARS: usize = 16;
+
 /// 模型流停滞超时：超过此时间未收到任何流式内容即判定连接已死。
 ///  reasoning 模型的首 token 可能较慢，但流式增量应持续到达。
 pub(crate) const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(120);

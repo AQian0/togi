@@ -153,10 +153,12 @@ pub enum AgentEvent {
         response: tokio::sync::oneshot::Sender<crate::tools::ApprovalDecision>,
     },
     Notice(String),
-    /// 子代理产生的事件：`depth` 为展示深度（1 = 主代理的直接子代理）。
-    /// 嵌套子代理的事件会被多层 `Child` 包裹，转换层取最内层深度。
+    /// 子代理产生的事件：`depth` 为展示深度（1 = 主代理的直接子代理），
+    /// `label` 为该次委派的短标识（任务摘要）——并行子代理事件交错时据以
+    /// 区分归属。嵌套子代理的事件会被多层 `Child` 包裹，转换层取最内层。
     Child {
         depth: u32,
+        label: std::sync::Arc<str>,
         event: Box<AgentEvent>,
     },
 }

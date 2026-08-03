@@ -226,9 +226,10 @@ impl AgentTool {
         )
         .map_err(|err| AgentToolError::Build(err.user_message()))?;
 
-        // 事件转发：子代理的工具活动戳记展示深度后转给 UI；
-        // 流式文本/分区事件丢弃——最终结论会作为本工具结果完整展示，
-        // 混入父回答的 markdown 流会造成错乱。
+        // 事件转发：子代理的工具活动戳记展示深度与委派标识后转给 UI
+        // （并行子代理事件交错时按标识区分归属）；流式文本/分区事件丢弃——
+        // 最终结论会作为本工具结果完整展示，混入父回答的 markdown 流会错乱。
+        let label = slug(&args.task);
         let (child_tx, mut child_rx) = tokio::sync::mpsc::unbounded_channel();
         let depth = self.depth + 1;
         let drain = tokio::spawn(async move {
@@ -237,6 +238,7 @@ impl AgentTool {
                     AgentEvent::Text(_) | AgentEvent::Section(_) => continue,
                     event => AgentEvent::Child {
                         depth,
+                        label: Arc::clone(&label),
                         event: Box::new(event),
                     },
                 };
@@ -280,6 +282,19 @@ impl AgentTool {
         names.sort();
         names.join(", ")
     }
+}
+
+/// 委派标识：任务文本折叠空白后截断，用于并行子代理事件的归属展示。
+fn slug(task: &str) -> Arc<str> {
+    let collapsed = task.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out: String = collapsed
+        .chars()
+        .take(constants::CHILD_LABEL_MAX_CHARS)
+        .collect();
+    if collapsed.chars().count() > constants::CHILD_LABEL_MAX_CHARS {
+        out.push('…');
+    }
+    Arc::from(out)
 }
 
 /// 从子代理最终历史中提取结论：最近一条含文本的 assistant 消息。
@@ -523,6 +538,15 @@ mod tests {
             panic!("expected UnknownProfile, got {err}");
         };
         assert_eq!(available, "reader");
+    }
+
+    #[test]
+    fn slug_collapses_whitespace_and_truncates() {
+        assert_eq!(&*slug("审查  src/a.rs\n的结构"), "审查 src/a.rs 的结构");
+        let long = slug(&"很长的任务描述".repeat(4));
+        assert!(long.ends_with('…'));
+        assert_eq!(long.chars().count(), constants::CHILD_LABEL_MAX_CHARS + 1);
+        assert_eq!(&*slug("短"), "短");
     }
 
     #[test]
