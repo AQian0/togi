@@ -415,11 +415,11 @@ impl HistoryStore {
 
 /// 计算默认数据库文件路径。
 ///
-/// 优先取 `TOGI_DB` 环境变量；否则使用 `dirs::data_dir()` 的平台推荐
-/// 数据目录下的 `togi/` 子目录：
-/// - Linux: `~/.local/share/togi/`
-/// - macOS: `~/Library/Application Support/togi/`
-/// - Windows: `%APPDATA%\togi\`
+/// 优先取 `TOGI_DB` 环境变量（全局单一数据库，旧行为）；否则按当前工作
+/// 目录分别存放（与 Pi 的 `sessions/<编码cwd>/` 一致，每个项目独立会话列表）：
+/// - Linux: `~/.local/share/togi/<编码cwd>/togi.db`
+/// - macOS: `~/Library/Application Support/togi/<编码cwd>/togi.db`
+/// - Windows: `%APPDATA%\togi\<编码cwd>\togi.db`
 ///
 /// 返回 `None` 表示无法确定路径，此时应用应静默降级为纯内存模式。
 pub fn default_db_path() -> Option<PathBuf> {
@@ -429,15 +429,31 @@ pub fn default_db_path() -> Option<PathBuf> {
         return Some(PathBuf::from(path));
     }
     let base = dirs::data_dir()?;
+    let cwd = std::env::current_dir().ok()?;
     Some(
         base.join(constants::APP_DIR_NAME)
+            .join(encode_cwd(&cwd.to_string_lossy()))
             .join(constants::DB_FILENAME),
     )
+}
+
+/// 将工作目录编码为目录名：非字母数字字符一律替换为 `-`（同 Pi 的编码风格）。
+/// ponytail: `/a-b` 与 `/a/b` 编码相同会共享数据库，概率极低，撞上了用 TOGI_DB 分开。
+fn encode_cwd(cwd: &str) -> String {
+    cwd.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn encode_cwd_replaces_separators() {
+        assert_eq!(super::encode_cwd("/Users/aqian/togi"), "-Users-aqian-togi");
+        assert_eq!(super::encode_cwd("C:\\code\\my proj"), "C--code-my-proj");
+    }
+
     use super::*;
     use rig::OneOrMany;
     use rig::message::{Message, UserContent};
