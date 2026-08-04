@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod modify;
 pub mod read;
+pub mod search;
 pub mod shell;
 
 use serde_json::Value;

@@ -101,6 +101,8 @@ impl HistoryStore {
             let _ = std::fs::create_dir_all(parent);
         }
         let db = turso::Builder::new_local(&path.display().to_string())
+            // 原生 FTS 索引（路线图 §2.1）需要打开实验索引方法开关。
+            .experimental_index_method(true)
             .build()
             .await
             .map_err(|source| StoreError::Open {
@@ -132,6 +134,28 @@ impl HistoryStore {
         )
         .await
         .map_err(|source| StoreError::Query { source })?;
+
+        // 索引 schema（路线图 §2.1）。FTS 为实验特性：创建失败仅降级检索
+        // 能力（search 查询时报错），不影响会话历史持久化。
+        if let Err(err) = conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS indexed_files (
+                    path TEXT PRIMARY KEY,
+                    hash TEXT NOT NULL,
+                    mtime INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL,
+                    start_line INTEGER NOT NULL,
+                    content TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS chunks_fts ON chunks USING fts (content);",
+            )
+            .await
+        {
+            tracing::warn!(error = %err, "index schema init failed, search degraded");
+        }
 
         // 旧版表（含 role 列的 envelope 时代）直接重建：本地历史是可弃缓存，
         // 不做原地迁移；旧数据本就解码不了，留着只会让 INSERT 违反 NOT NULL。
@@ -166,6 +190,11 @@ impl HistoryStore {
         }
 
         Ok(Self { conn })
+    }
+
+    /// 暴露底层连接，供索引 / 检索（`crate::index`）直接执行 SQL。
+    pub(crate) fn conn(&self) -> &turso::Connection {
+        &self.conn
     }
 
     /// 加载指定会话的消息历史，按插入顺序返回。

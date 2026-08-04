@@ -19,12 +19,16 @@ builtins-switch-desc = Switch to a session (number or ID)
 builtins-new-desc = Create a new session
 builtins-delete-desc = Delete a session
 builtins-cwd-desc = Show current working directory
+builtins-index-desc = Index the codebase (default: current directory) for the search tool
 builtins-exit-desc = Exit (also via exit / quit or Ctrl-C)
 
 builtins-clear-done = Cleared conversation history ({ $count } messages).
 builtins-history-title = Conversation history ({ $count } messages)
 builtins-history-empty = No conversation history yet.
 builtins-cwd-display = Current working directory: { $cwd }
+builtins-index-unavailable = Database unavailable; cannot build the index.
+builtins-index-invalid = Path does not exist or is not a directory: { $path }
+builtins-index-done = Indexing done: { $scanned } scanned, { $updated } updated, { $skipped } skipped, { $removed } removed, { $chunks } chunks written.
 builtins-unknown-command = Unknown command `{ $command }`. Type /help to see available commands.
 builtins-sessions-title = Sessions ({ $count })
 builtins-sessions-empty = No sessions yet.
@@ -77,6 +81,8 @@ config-loaded = [togi] Loaded config file: { $path }
 
 # ── Errors (user-facing) ────────────────────────────────────────────
 error-empty-path = `path` must not be empty.
+search-empty-query = `query` must not be empty.
+search-query-error = Index query failed: { $error }
 error-empty-command = `command` must not be empty.
 error-empty-old-text = `old_text` must not be empty. Provide the exact text to replace.
 error-no-instructions = no edit instructions provided. Pass `content` to write the whole file, or `old_text` (and optional `new_text`) / `edits` to replace text in an existing file.

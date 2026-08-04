@@ -19,12 +19,16 @@ builtins-switch-desc = 切换到指定会话（编号或 ID）
 builtins-new-desc = 创建新会话
 builtins-delete-desc = 删除指定会话
 builtins-cwd-desc = 显示当前工作目录
+builtins-index-desc = 索引代码库（默认当前目录），供 search 工具检索
 builtins-exit-desc = 退出（也可用 exit / quit 或 Ctrl-C）
 
 builtins-clear-done = 已清空对话历史（共 { $count } 条消息）。
 builtins-history-title = 对话历史（共 { $count } 条消息）
 builtins-history-empty = 暂无对话历史。
 builtins-cwd-display = 当前工作目录：{ $cwd }
+builtins-index-unavailable = 数据库不可用，无法建立索引。
+builtins-index-invalid = 路径不存在或不是目录：{ $path }
+builtins-index-done = 索引完成：扫描 { $scanned } 个文件，更新 { $updated } 个，跳过 { $skipped } 个，移除 { $removed } 个，写入 { $chunks } 个分块。
 builtins-unknown-command = 未知命令 `{ $command }`。输入 /help 查看可用命令。
 builtins-sessions-title = 会话列表（共 { $count } 个）
 builtins-sessions-empty = 暂无会话。
@@ -77,6 +81,8 @@ config-loaded = [togi] 已加载配置文件：{ $path }
 
 # ── Errors (user-facing) ────────────────────────────────────────────
 error-empty-path = `path` 不能为空。
+search-empty-query = `query` 不能为空。
+search-query-error = 索引查询失败：{ $error }
 error-empty-command = `command` 不能为空。
 error-empty-old-text = `old_text` 不能为空。请提供要替换的原始文本。
 error-no-instructions = 未提供编辑指令。传入 `content` 写入整个文件，或传入 `old_text`（及可选的 `new_text`）/ `edits` 替换已有文件中的文本。

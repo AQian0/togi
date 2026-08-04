@@ -95,6 +95,11 @@ after = ["analyze"]
 
 ### 阶段 2.1：关键词检索（Turso 原生 FTS，无 embedding 依赖，先做这个）
 
+> **状态：已完成。** 验收通过（索引本项目 ~1.4 万行 ~0.3s；`retry backoff` 命中 `agent.rs`，见 `index::tests::index_self_project`）。与原文的实现偏差：
+> - **写入必须按语句批量**：turso 对 chunks 表的每条写语句做一次 Tantivy flush，逐行插入 400 块 ~26s，100 行/条多行 INSERT + IN 批量 DELETE 后 ~0.1s。这是本阶段最大的实现发现。
+> - 文件级状态独立为 `indexed_files` 表（path → hash+mtime），增量走 mtime 快路径、hash 确认；变更/消失文件的旧分块整批清除后重写。
+> - 目录遍历用固定跳过名单（.git/.jj/target/node_modules），不解析 .gitignore（零依赖）；二进制与非 UTF-8 文件跳过。
+
 - turso 建 `chunks` 表 + FTS 索引。注意：Turso 引擎**不支持 SQLite FTS5 虚拟表**，官方兼容清单明确标注 ❌；其 FTS 是 Tantivy 实现的原生索引：
   - 建索引：`CREATE INDEX chunks_fts ON chunks USING fts (content)`
   - 查询：`fts_match(content, ?)` 过滤 + `fts_score` BM25 排序 + `fts_highlight` 高亮
@@ -177,7 +182,7 @@ after = ["analyze"]
 | 里程碑 | 内容 | 依赖 |
 |---|---|---|
 | **M1** | 1.1 基础子代理 ✅ + 3.2 工具确认 ✅ | 无 |
-| **M2** | 1.2 并行子代理 ✅ + 2.1 FTS 索引/检索 | M1 |
+| **M2** | 1.2 并行子代理 ✅ + 2.1 FTS 索引/检索 ✅ | M1 |
 | **M3** | 1.3 编排 DAG + 1.4 黑板通信 | M2、Q4 |
 | **M4** | 2.2 向量 RAG + 2.3 长期记忆（+ 3.3 MCP） | Q1、Q2 |
 

@@ -17,6 +17,7 @@ pub(crate) static HELP_ROWS: &[(&str, &str)] = &[
     ("/new", "builtins-new-desc"),
     ("/delete", "builtins-delete-desc"),
     ("/cwd", "builtins-cwd-desc"),
+    ("/index", "builtins-index-desc"),
     ("/exit、/quit", "builtins-exit-desc"),
 ];
 
@@ -240,6 +241,47 @@ pub async fn handle_command(
                 }
                 Err(msg) => {
                     send_notice(&tx, &msg);
+                }
+            }
+        }
+        "/index" => {
+            let Some(store) = store else {
+                send_notice(&tx, &crate::t!("builtins-index-unavailable"));
+                return true;
+            };
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let root = if arg.is_empty() {
+                cwd
+            } else {
+                let p = std::path::PathBuf::from(arg);
+                if p.is_absolute() { p } else { cwd.join(p) }
+            };
+            if !root.is_dir() {
+                send_notice(
+                    &tx,
+                    &crate::t!("builtins-index-invalid", path = root.display().to_string()),
+                );
+                return true;
+            }
+            match crate::index::index_root(store.conn(), &root).await {
+                Ok(stats) => {
+                    send_notice(
+                        &tx,
+                        &crate::t!(
+                            "builtins-index-done",
+                            scanned = stats.scanned,
+                            updated = stats.updated,
+                            skipped = stats.skipped,
+                            removed = stats.removed,
+                            chunks = stats.chunks
+                        ),
+                    );
+                }
+                Err(err) => {
+                    send_notice(
+                        &tx,
+                        &crate::t!("store-query-error", error = err.user_message()),
+                    );
                 }
             }
         }

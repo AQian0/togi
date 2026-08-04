@@ -10,6 +10,7 @@ use crate::store::HistoryStore;
 use crate::tools::agent::AgentTool;
 use crate::tools::modify::Modify;
 use crate::tools::read::Read;
+use crate::tools::search::Search;
 use crate::tools::shell::Shell;
 use crate::tools::{ToolEffect, ToolRegistry};
 use crate::ui::ErrorInfo;
@@ -218,6 +219,7 @@ fn build_tools(
     api_key: Option<&str>,
     max_multi_turn: u32,
     approval_policy: ApprovalPolicy,
+    store: Option<Arc<HistoryStore>>,
 ) -> (Vec<DynamicTool>, ToolRegistry) {
     let mut registry = ToolRegistry::new();
 
@@ -229,7 +231,7 @@ fn build_tools(
     registry.register::<Shell>();
     registry.register::<AgentTool>();
 
-    let tools = vec![
+    let mut tools = vec![
         crate::pipeline::adapt(Read),
         crate::pipeline::adapt(Modify),
         crate::pipeline::adapt(Shell),
@@ -243,6 +245,11 @@ fn build_tools(
             .with_approval_policy(approval_policy.clone()),
         ),
     ];
+    // 数据库可用时才有索引可查，否则注册一个永远报错的工具只是占 prompt 位。
+    if let Some(store) = store {
+        registry.register::<Search>();
+        tools.push(crate::pipeline::adapt(Search::new(store)));
+    }
     let tools = inject(
         serde_json::Map::from_iter([(CWD_PARAM.into(), cwd.display().to_string().into())]),
         tools,
@@ -345,6 +352,8 @@ pub async fn run() -> crate::shared::error::Result<()> {
     })?;
     tracing::debug!(cwd = %cwd.display(), model = ?args.model, "app starting");
     let approval_policy = ApprovalPolicy::new(config.approval.always_allow.iter().cloned());
+    // 先初始化存储：search 工具需要共享数据库连接。
+    let (history, store, session_id, context) = init_history().await;
     let (tools, registry) = build_tools(
         &cwd,
         // 子代理缺省模型跟随主代理（profile 可覆盖）。
@@ -355,9 +364,9 @@ pub async fn run() -> crate::shared::error::Result<()> {
         args.api_key.as_deref(),
         config.effective_max_multi_turn(),
         approval_policy.clone(),
+        store.clone(),
     );
     let agent = Arc::new(build_agent(&args, &config, tools)?);
-    let (history, store, session_id, context) = init_history().await;
     let mut session = Session::new(approval_policy)?;
 
     let global_cancel = CancellationToken::new();
